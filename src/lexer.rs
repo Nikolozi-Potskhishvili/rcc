@@ -9,6 +9,7 @@ pub enum Token {
     Constant(Constant),
     Operator(String),
     SpecialCharacter(String),
+    Comments(String),
     EndOFFile,
 }
 
@@ -18,46 +19,69 @@ struct Constant {
     const_value: String,
 }
 
-pub struct Lexer<'a> {
-    source_code: &'a str,
-}
-
-impl<'a> Lexer<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Lexer {
-            source_code: input,
+impl Constant {
+    fn new(value_type: String, value: String) -> Self {
+        Constant {
+            const_type: value_type,
+            const_value: value,
         }
     }
+}
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
+pub struct Lexer {
+}
+
+impl Lexer {
+
+    pub fn tokenize(source_code: &str) -> Vec<Token> {
         let mut result : Vec<Token> = Vec::new();
         let mut cur_token = String::new();
 
-        for line in self.source_code.lines() {
-            let chars = line.chars().collect::<Vec<_>>();
-            for char in chars {
-                if char.is_whitespace() {
-                    if !cur_token.is_empty() {
-                        validate_token(&mut cur_token, &mut result);
-                    }
-                    cur_token.clear();
-                } else {
-                    cur_token.push(char);
-                    if let Ok(token) = get_token_type(&cur_token) {
-                        validate_token(&mut cur_token, &mut result);
-                        cur_token.clear();
-                    }
-                }
+        for line in source_code.lines() {
+            for s in line.split_whitespace() {
+                parse_token_helper(s, &mut result);
             }
-
-            if !cur_token.is_empty() {
-                validate_token(&mut cur_token, &mut result);
-            }
-            cur_token.clear();
         }
         result
     }
-
+}
+/// this function parses string which certainly contains at least one token
+fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
+    let mut cur_token = String::new();
+    for char in s.chars() {
+        if is_operator(&char.to_string()) {
+            result.push(Token::Operator(char.to_string()));
+            if let Some(token) = parse_long_token(&cur_token) {
+                result.push(token);
+            }
+            cur_token = String::new();
+        } else if is_special_symbol(&char.to_string()) {
+            result.push(Token::SpecialCharacter(char.to_string()));
+            if let Some(token) = parse_long_token(&cur_token) {
+                result.push(token);
+            }
+            cur_token = String::new();
+        } else {
+            cur_token.push(char);
+        }
+    }
+    if !cur_token.is_empty() {
+        if let Some(token) = parse_long_token(&cur_token) {
+            result.push(token);
+        }
+   }
+}
+/// parses long tokens such as keywords, constants and identifiers
+fn parse_long_token(s: &str) -> Option<Token> {
+    if s.is_empty() {
+        return None;
+    }
+    if is_keyword(s) {
+        return Some(Token::Keyword(String::from(s)))
+    } else if is_const_number(s) {
+        return Some(Token::Constant(Constant::new(String::from("Integer"), String::from(s))))
+    }
+    Some(Token::Identifier(s.to_string()))
 }
 
 fn validate_token(cur_token: &mut str, result:& mut Vec<Token>) {
@@ -73,6 +97,14 @@ fn get_token_type(token: &str) -> Result<Token, &'static str> {
     Ok(Token::EndOFFile)
 }
 
+fn is_special_symbol(token: &str) -> bool {
+    if token.len() != 1 {
+        return false;
+    }
+    let allowed_chars = "[]{}(),.:;*=#~";
+    let ch = token.chars().next().unwrap();
+    allowed_chars.contains(ch)
+}
 
 fn is_keyword(token: &str) -> bool {
     token == "int" || token == "for" || token == "while" || token == "if" || token == "else" ||
@@ -82,7 +114,7 @@ fn is_keyword(token: &str) -> bool {
 fn is_operator(token: &str) -> bool {
     token == "+" || token == "-" || token == "*" || token == "/" || token == "%" ||
         token == ">" || token == "<" || token == "&" || token == "|" || token == "sizeof" ||
-        token == "(" || token == ")" || token == "[" || token == "]" || token == "->"
+        token == "->"
 }
 
 fn is_const_number(token: &str) -> bool {
@@ -150,12 +182,35 @@ mod tests {
     #[test]
     fn only_keywords() {
         let input = "for while if else";
-        let mut lexer = Lexer::new(input);
-        let output = lexer.tokenize();
+        let output = Lexer::tokenize(&input);
         output.iter().for_each(|token| {
             println!("{token:?}")
         });
         assert_eq!(output.len(), 4);
+    }
+
+    #[test]
+    fn simple_return() {
+        let input = "\
+        int main() {\
+            return 2;\
+        }";
+        let output = Lexer::tokenize(&input);
+        output.iter().for_each(|token| {
+            println!("{token:?}")
+        });
+        assert_eq!(output.len(), 9);
+    }
+
+    #[test]
+    fn for_loop() {
+        let input_regular = "for(int i = 0; i < 1; i++) {";
+        let input_minimal_spaces= "for(int i=0; i<1;i++){";
+
+        let first_output = Lexer::tokenize(&input_regular);
+        let second_output = Lexer::tokenize(&input_minimal_spaces);
+
+        assert_eq!(first_output.len(), second_output.len());
     }
 
     #[test]
