@@ -1,35 +1,67 @@
-use std::arch::x86_64::_mm256_testc_pd;
-use std::io::read_to_string;
 use std::ops::{Add, RangeBounds};
 
 #[derive(Debug, PartialEq)]
 pub enum Token {
     Identifier(String),
-    Keyword(String),
+    Keyword(Keyword),
     Constant(Constant),
     Operator(String),
-    SpecialCharacter(String),
+    SpecialCharacter(SpecialCharacter),
     Comments(String),
     EndOFFile,
 }
 
 #[derive(Debug, PartialEq)]
-struct Constant {
-    const_type: String,
-    const_value: String,
+pub enum Keyword {
+    Return,
+    Integer,
+    Double,
+    Float,
+    Char,
+    Void,
+    For,
+    While,
+    If,
+    Else,
+    SizeOf,
 }
 
-impl Constant {
-    fn new(value_type: String, value: String) -> Self {
-        Constant {
-            const_type: value_type,
-            const_value: value,
-        }
-    }
+pub enum Operator {
+    Plus,
+    Minus,
+    Division,
+    Multiplication,
+    Equals,
+    And,
+    Or,
+    Not,
+    Xor,
+    Modulo,
 }
 
-pub struct Lexer {
+#[derive(Debug, PartialEq)]
+pub enum Constant {
+    Integer(i32),
+    Short(i16),
+    Long(i64),
+    Double(f32),
+    Float(f64),
+    Char(char),
 }
+
+#[derive(Debug, PartialEq)]
+pub enum SpecialCharacter {
+    LeftParenthesis,
+    RightParenthesis,
+    LeftCurlyBracket,
+    RightCurlyBracket,
+    LeftSquareBracket,
+    RightSquareBracket,
+    SemiColon,
+}
+
+pub struct Lexer;
+
 
 impl Lexer {
 
@@ -55,8 +87,8 @@ fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
                 result.push(token);
             }
             cur_token = String::new();
-        } else if is_special_symbol(&char.to_string()) {
-            result.push(Token::SpecialCharacter(char.to_string()));
+        } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
+            result.push(Token::SpecialCharacter(special_symbol));
             if let Some(token) = parse_long_token(&cur_token) {
                 result.push(token);
             }
@@ -76,39 +108,43 @@ fn parse_long_token(s: &str) -> Option<Token> {
     if s.is_empty() {
         return None;
     }
-    if is_keyword(s) {
-        return Some(Token::Keyword(String::from(s)))
-    } else if is_const_number(s) {
-        return Some(Token::Constant(Constant::new(String::from("Integer"), String::from(s))))
+    if let Ok(keyword) = get_keyword(s) {
+        return Some(Token::Keyword(keyword))
+    } else if is_const_integer(s) {
+        return Some(Token::Constant(Constant::Integer(s.parse::<i32>().unwrap())))
     }
     Some(Token::Identifier(s.to_string()))
 }
 
-fn validate_token(cur_token: &mut str, result:& mut Vec<Token>) {
-    if let Ok(token) = get_token_type(&cur_token) {
-        result.push(token);
-    }
-}
-
-fn get_token_type(token: &str) -> Result<Token, &'static str> {
-    if is_keyword(token) {
-        return Ok(Token::Keyword(String::from(token)));
-    }
-    Ok(Token::EndOFFile)
-}
-
-fn is_special_symbol(token: &str) -> bool {
+fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
     if token.len() != 1 {
-        return false;
+        return Err("Special character length must be 1");
     }
     let allowed_chars = "[]{}(),.:;*=#~";
     let ch = token.chars().next().unwrap();
-    allowed_chars.contains(ch)
+    match  ch {
+        '[' => Ok(SpecialCharacter::LeftSquareBracket),
+        ']' => Ok(SpecialCharacter::RightSquareBracket),
+        '{' => Ok(SpecialCharacter::LeftCurlyBracket),
+        '}' => Ok(SpecialCharacter::RightCurlyBracket),
+        '(' => Ok(SpecialCharacter::LeftParenthesis),
+        ')' => Ok(SpecialCharacter::RightParenthesis),
+        ';' => Ok(SpecialCharacter::SemiColon),
+        _ => Err("Illegal special character"),
+    }
 }
 
-fn is_keyword(token: &str) -> bool {
-    token == "int" || token == "for" || token == "while" || token == "if" || token == "else" ||
-        token == "return"
+
+fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
+     match token {
+        "int" => Ok(Keyword::Integer),
+        "for" => Ok(Keyword::For),
+        "while" => Ok(Keyword::While),
+        "if" => Ok(Keyword::If),
+        "else" => Ok(Keyword::Else),
+        "return" => Ok(Keyword::Return),
+        _ => Err("unexpected error during parsing keyword"),
+    }
 }
 
 fn is_operator(token: &str) -> bool {
@@ -117,8 +153,8 @@ fn is_operator(token: &str) -> bool {
         token == "->"
 }
 
-fn is_const_number(token: &str) -> bool {
-    if let Ok(number) = token.to_string().parse::<i64>() {
+fn is_const_integer(token: &str) -> bool {
+    if let Ok(number) = token.to_string().parse::<i32>() {
         return true
     }
     false
@@ -131,7 +167,7 @@ fn is_const_char(token: &str) -> bool {
 
 
 fn is_const(token: &str) -> bool {
-    is_const_number(token)
+    is_const_integer(token)
 }
 
 fn is_identifier(token: &str) -> bool {
@@ -162,7 +198,7 @@ fn is_identifier(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::{is_identifier, is_keyword, Lexer};
+    use crate::lexer::{is_identifier, get_keyword, Lexer, Keyword, Token};
 
     #[test]
     fn keywords() {
@@ -172,11 +208,11 @@ mod tests {
         let imput4 = "if";
         let imput5 = "else";
 
-        assert!(is_keyword(imput1));
-        assert!(is_keyword(imput2));
-        assert!(is_keyword(imput3));
-        assert!(is_keyword(imput4));
-        assert!(is_keyword(imput5));
+        assert_eq!(get_keyword(imput1), Ok(Keyword::For));
+        assert_eq!(get_keyword(imput2), Ok(Keyword::While));
+        assert_eq!(get_keyword(imput3), Ok(Keyword::Return));
+        assert_eq!(get_keyword(imput4), Ok(Keyword::If));
+        assert_eq!(get_keyword(imput5), Ok(Keyword::Else));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::{env, fs};
 use crate::lexer::Lexer;
+use crate::parser::generate_AST_tree;
 
 mod lexer;
 mod parser;
@@ -15,7 +16,8 @@ fn main() {
     let file_name = &args[1];
     let source_code = fs::read_to_string(file_name).expect("Problem with reading file");
 
-    let _tokens = Lexer::tokenize(&source_code);
+    let tokens = Lexer::tokenize(&source_code);
+    let AST_tree = generate_AST_tree(tokens);
 
 
 }
