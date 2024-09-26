@@ -82,17 +82,17 @@ fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
     let mut cur_token = String::new();
     for char in s.chars() {
         if is_operator(&char.to_string()) {
+            if let Some(token) = parse_long_token(&cur_token) {
+                result.push(token);
+            }
+            cur_token = String::new();
             result.push(Token::Operator(char.to_string()));
-            if let Some(token) = parse_long_token(&cur_token) {
-                result.push(token);
-            }
-            cur_token = String::new();
         } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
-            result.push(Token::SpecialCharacter(special_symbol));
             if let Some(token) = parse_long_token(&cur_token) {
                 result.push(token);
             }
             cur_token = String::new();
+            result.push(Token::SpecialCharacter(special_symbol));
         } else {
             cur_token.push(char);
         }
