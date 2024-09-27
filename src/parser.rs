@@ -1,7 +1,14 @@
 use std::cell::RefCell;
+use std::io::read_to_string;
+use std::iter::Peekable;
 use std::ops::Deref;
+use std::os::unix::raw::time_t;
+use std::ptr::read;
 use std::rc::{Rc, Weak};
-use crate::lexer::{SpecialCharacter, Keyword, Token, Constant};
+use std::vec::IntoIter;
+use log::error;
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant};
+
 pub struct ASTNode {
     node_type: ASTNodeType,
     parent_node: Option<Weak<RefCell<ASTNode>>>,
@@ -33,8 +40,26 @@ pub enum ASTNodeType {
     IntegerLiteral(i32),
     Identifier(String),
 
+    //operators
+    NotOperator,
+
     //statements
     ReturnStatement(),
+}
+
+pub fn ast_recursion_helper(token_itr: &Peekable<IntoIter<Token>>, cur_node: Rc<RefCell<ASTNode>>) {
+    match cur_node.borrow().node_type {
+        ASTNodeType::Root => return,
+        ASTNodeType::FnDeclaration { .. } => {
+
+        }
+        ASTNodeType::VarDecl { .. } => {}
+        ASTNodeType::IntegerLiteral(_) => {}
+        ASTNodeType::Identifier(_) => {}
+        ASTNodeType::NotOperator => {}
+        ASTNodeType::ReturnStatement() => {}
+        _ => {}
+    }
 }
 
 pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>, String> {
@@ -45,7 +70,6 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
     }));
 
     let mut current_node = Rc::clone(&root);
-
     let mut token_iter = tokens.into_iter().peekable();
 
     // Parse the tokens
@@ -81,22 +105,40 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
 
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
+                let return_node = Rc::new(RefCell::new(ASTNode {
+                    node_type: ASTNodeType::ReturnStatement(),
+                    parent_node: Some(Rc::downgrade(&current_node)),
+                    children_nodes: Vec::new(),
+                }));
                 if let Some(Token::Constant(constant)) = token_iter.next() {
-                    let return_node = Rc::new(RefCell::new(ASTNode {
-                        node_type: ASTNodeType::ReturnStatement(),
-                        parent_node: Some(Rc::downgrade(&current_node)),
-                        children_nodes: Vec::new(),
-                    }));
                     if let Ok(parsed_const) = parse_const(constant, &return_node) {
                         return_node.borrow_mut().children_nodes.push(parsed_const);
                     }
                     current_node.borrow_mut().children_nodes.push(return_node);
-                    continue;
-                } else {
-                    return Err("Expected a number after return".to_string());
+                    if let Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) = token_iter.peek() {
+                        continue
+                    } else {
+                        return Err("no semicolon after return".to_string());
+                    }
+                } else if Some(Token::Operator(op)) {
+                    match op {
+                        Operator::Not => {
+                            let not_node = Rc::new(RefCell::new(ASTNode {
+                                node_type: ASTNodeType::NotOperator,
+                                parent_node: Some(Rc::downgrade(&return_node)),
+                                children_nodes: vec![],
+                            }));
+                        },
+                        Operator::BitCompl => {
+
+                        },
+                        Operator::Minus => {
+
+                        },
+                        _ => return Err("operator is not supported yet".to_string()),
+                    }
                 }
             }
-
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket)=> {
                 if let Some(parent) = {

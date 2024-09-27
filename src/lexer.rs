@@ -5,7 +5,7 @@ pub enum Token {
     Identifier(String),
     Keyword(Keyword),
     Constant(Constant),
-    Operator(String),
+    Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
     EndOFFile,
@@ -26,6 +26,7 @@ pub enum Keyword {
     SizeOf,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Operator {
     Plus,
     Minus,
@@ -37,6 +38,7 @@ pub enum Operator {
     Not,
     Xor,
     Modulo,
+    BitCompl,
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,12 +83,12 @@ impl Lexer {
 fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
     let mut cur_token = String::new();
     for char in s.chars() {
-        if is_operator(&char.to_string()) {
+        if let Some(operator) = get_operator(&char.to_string()) {
             if let Some(token) = parse_long_token(&cur_token) {
                 result.push(token);
             }
             cur_token = String::new();
-            result.push(Token::Operator(char.to_string()));
+            result.push(Token::Operator(operator));
         } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
             if let Some(token) = parse_long_token(&cur_token) {
                 result.push(token);
@@ -147,10 +149,13 @@ fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
     }
 }
 
-fn is_operator(token: &str) -> bool {
-    token == "+" || token == "-" || token == "*" || token == "/" || token == "%" ||
-        token == ">" || token == "<" || token == "&" || token == "|" || token == "sizeof" ||
-        token == "->"
+fn get_operator(token: &str) -> Result<Operator, String> {
+    match token {
+        "!" => Ok(Operator::Not),
+        "-" => Ok(Operator::Minus),
+        "~" => Ok(Operator::BitCompl),
+        _ => Err(String::from("unexpected error during parsing operator")),
+    }
 }
 
 fn is_const_integer(token: &str) -> bool {
