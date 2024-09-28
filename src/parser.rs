@@ -1,13 +1,11 @@
 use std::cell::RefCell;
-use std::io::read_to_string;
+use std::cmp::PartialEq;
 use std::iter::Peekable;
-use std::ops::Deref;
-use std::os::unix::raw::time_t;
-use std::ptr::read;
+use std::os::unix::raw::mode_t;
 use std::rc::{Rc, Weak};
 use std::vec::IntoIter;
-use log::error;
-use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant};
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Lexer};
+
 
 pub struct ASTNode {
     node_type: ASTNodeType,
@@ -29,7 +27,7 @@ impl ASTNode {
     }
 }
 
-#[derive(Debug)]
+
 pub enum ASTNodeType {
     Root,
     FnDeclaration{ fn_name: String, return_type: String},
@@ -41,26 +39,142 @@ pub enum ASTNodeType {
     Identifier(String),
 
     //operators
-    NotOperator,
+    BinaryOperation {
+        operator: Operator,
+        right: Rc<RefCell<ASTNode>>,
+        left: Rc<RefCell<ASTNode>>,
+    },
+    UnaryOperation {
+        operator: Operator,
+        operand: Rc<RefCell<ASTNode>>,
+    },
+    OperandNode {
+        value: Token,
+    },
 
     //statements
     ReturnStatement(),
 }
 
-pub fn ast_recursion_helper(token_itr: &Peekable<IntoIter<Token>>, cur_node: Rc<RefCell<ASTNode>>) {
-    match cur_node.borrow().node_type {
-        ASTNodeType::Root => return,
-        ASTNodeType::FnDeclaration { .. } => {
+struct ExpressionParser {
+    tokens: Vec<Token>,
+    current_token: usize,
+}
+
+
+impl ExpressionParser {
+
+    fn new(tokens: Vec<Token>) -> Self {
+        ExpressionParser {
+            tokens,
+            current_token: 0,
+        }
+    }
+
+    fn is_at_end(&self) -> bool {
+        self.current_token >= self.tokens.len() || self.tokens[self.current_token] == Token::EndOFFile
+            || self.tokens[self.current_token] == Token::SpecialCharacter(SpecialCharacter::SemiColon)
+    }
+
+    fn parse(&mut self, parent: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+
+        while !self.is_at_end() {
 
         }
-        ASTNodeType::VarDecl { .. } => {}
-        ASTNodeType::IntegerLiteral(_) => {}
-        ASTNodeType::Identifier(_) => {}
-        ASTNodeType::NotOperator => {}
-        ASTNodeType::ReturnStatement() => {}
-        _ => {}
+        parent
+    }
+
+    fn peek(&self) -> &Token {
+        if self.is_at_end() {
+            &Token::EndOFFile
+        } else {
+            &self.tokens[self.current_token]
+        }
+    }
+
+    fn consume(&mut self) -> Token {
+        if self.is_at_end() {
+          return Token::EndOFFile
+        }
+        let token = self.tokens[self.current_token].clone();
+        self.current_token += 1;
+        token
+    }
+
+    fn expect(&mut self, expected: Token) -> Result<Token, String> {
+        if *self.peek() == expected {
+            Ok(self.consume())
+        } else {
+            Err(format!("Expected {:?}, got {:?}", expected, self.peek()))
+        }
+    }
+
+    fn parse_expression(&mut self) -> Rc<RefCell<ASTNode>> {
+        self.parse_additive()
+    }
+
+    fn parse_additive(&mut self) -> Rc<RefCell<ASTNode>> {
+        let node = self.parse_multiplicative()
+        
+        loop {
+            match self.peek() {
+                Token::Operator(Operator::Plus) => {
+                    self.consume();
+                }
+                _ => break,
+            }
+        }
+        
+        node
+    }
+
+    fn parse_multiplicative(&mut self) -> Rc<RefCell<ASTNode>> {
+        self.parse_unary()
+    }
+
+    fn parse_unary(&mut self) -> Rc<RefCell<ASTNode>> {
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> Rc<RefCell<ASTNode>> {
+
     }
 }
+
+// current grammar:
+//Expression    ::= Additive
+//Additive      ::= Multiplicative ( '+' Multiplicative )*
+//Multiplicative ::= Unary ( ('*' | '/') Unary )*
+// Unary         ::= ('~' | '!' | '-') Unary | Primary
+// Primary       ::= NUMBER
+
+fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<RefCell<ASTNode>>) -> Result<(), String> {
+    let mut extracted_tokens: Vec<Token> = Vec::new();
+    for token in tokens {
+        match token {
+            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_) => { extracted_tokens.push(token); },
+            Token::SpecialCharacter(character) => {
+                match character {
+                    SpecialCharacter::LeftParenthesis => {
+
+                    }
+                    SpecialCharacter::RightParenthesis => {
+
+                    }
+                    SpecialCharacter::SemiColon => { break;}
+                    _ => return Err(format!("Special character {:?} not supported", character)),
+                }
+            }
+            _ => return Err(format!("Unexpected token {:?}", token)),
+        }
+    }
+
+
+
+    return Ok(())
+}
+
+
 
 pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>, String> {
     let root = Rc::new(RefCell::new(ASTNode {
@@ -119,23 +233,6 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                         continue
                     } else {
                         return Err("no semicolon after return".to_string());
-                    }
-                } else if Some(Token::Operator(op)) {
-                    match op {
-                        Operator::Not => {
-                            let not_node = Rc::new(RefCell::new(ASTNode {
-                                node_type: ASTNodeType::NotOperator,
-                                parent_node: Some(Rc::downgrade(&return_node)),
-                                children_nodes: vec![],
-                            }));
-                        },
-                        Operator::BitCompl => {
-
-                        },
-                        Operator::Minus => {
-
-                        },
-                        _ => return Err("operator is not supported yet".to_string()),
                     }
                 }
             }

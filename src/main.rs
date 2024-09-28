@@ -31,7 +31,6 @@ fn get_source_code(file_name: &String) -> String {
 fn compile_source_code(source_code: String) ->  ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
-    println!("Adding child to parent: {:?}", *ast_tree.borrow().get_type());
     let code = generate_assembly(ast_tree);
     for line in code.lines() {
         println!("{}", line);

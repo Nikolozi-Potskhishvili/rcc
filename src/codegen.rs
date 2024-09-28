@@ -35,6 +35,7 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
                 result += &format!("    movl    ${}, %eax\n", return_val);
                 result += "    ret\n";
             }
+            _ => {}
         }
     }
 

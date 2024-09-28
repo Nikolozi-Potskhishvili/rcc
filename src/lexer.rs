@@ -1,6 +1,6 @@
 use std::ops::{Add, RangeBounds};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Identifier(String),
     Keyword(Keyword),
@@ -11,7 +11,7 @@ pub enum Token {
     EndOFFile,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Keyword {
     Return,
     Integer,
@@ -26,7 +26,7 @@ pub enum Keyword {
     SizeOf,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Operator {
     Plus,
     Minus,
@@ -41,7 +41,31 @@ pub enum Operator {
     BitCompl,
 }
 
-#[derive(Debug, PartialEq)]
+impl Operator {
+    pub fn is_unary(&self) -> bool {
+        return match self {
+            Operator::Not | Operator::Minus | Operator::BitCompl => true,
+            _ => false,
+        }
+    }
+    pub fn is_left_associative(&self) -> bool {
+        return match self {
+            Operator::Minus | Operator::BitCompl | Operator::And
+            | Operator::Or | Operator::Plus => true,
+            _ => false,
+        }
+    }
+    pub fn get_precedence(&self) -> i32 {
+        return match self {
+            Operator::Plus => 1,
+            Operator::Division | Operator::Multiplication => 2,
+            Operator::Not | Operator::BitCompl | Operator::Minus => 3,
+            _ => 0
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Constant {
     Integer(i32),
     Short(i16),
@@ -51,7 +75,7 @@ pub enum Constant {
     Char(char),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SpecialCharacter {
     LeftParenthesis,
     RightParenthesis,
@@ -88,6 +112,12 @@ fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
                 result.push(token);
             }
             cur_token = String::new();
+            match operator {
+                Operator::Minus => {
+                    result.push(Token::Operator(Operator::Plus));
+                },
+                _ => {},
+            }
             result.push(Token::Operator(operator));
         } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
             if let Some(token) = parse_long_token(&cur_token) {
