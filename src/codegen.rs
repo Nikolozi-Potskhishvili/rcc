@@ -1,5 +1,7 @@
 use std::cell::RefCell;
+use std::fmt::format;
 use std::rc::Rc;
+use crate::lexer::{Constant, Operator, Token};
 use crate::parser::{ASTNode, ASTNodeType};
 pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
     let mut result = String::new();
@@ -31,7 +33,7 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
             }
 
             ASTNodeType::ReturnStatement() => {
-                let return_val = generate_assembly(Rc::clone(child));
+                let return_val = evaluate_integer_expression(&child).expect("error during integer expression evaluation");
                 result += &format!("    movl    ${}, %eax\n", return_val);
                 result += "    ret\n";
             }
@@ -40,4 +42,49 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
     }
 
     result
+}
+
+
+fn evaluate_integer_expression(expression_root: &Rc<RefCell<ASTNode>>) -> Result<i32, String> {
+    match &expression_root.borrow().get_type() {
+        ASTNodeType::BinaryOperation { operator, right, left } => {
+            let eval_left = evaluate_integer_expression(left);
+            let eval_right = evaluate_integer_expression(right);
+            match operator {
+                Token::Operator(op) => {
+                    match op {
+                        Operator::Plus => Ok(eval_left? + eval_right?),
+                        Operator::Division => Ok(eval_left? / eval_right?),
+                        Operator::Multiplication => Ok(eval_left? * eval_right?),
+                        _ => Err(format!("{:?} invalid binary operator", op))
+
+                    }
+                }
+                _ => Err(format!("{:?} is not an operator", operator))
+            }
+        }
+        ASTNodeType::UnaryOperation { operator, operand } => {
+            let eval_operand = evaluate_integer_expression(operand);
+            match operator {
+                Token::Operator(op) => {
+                    match op {
+                        Operator::Minus => Ok( - eval_operand?),
+                        Operator::Not => Ok(!eval_operand?),
+                        Operator::Tilde => Ok(!eval_operand?),
+                        _ => Err(format!("{:?} invalid unary operator", op))
+                    }
+                }
+                _ => Err(format!("{:?} no an unary operator", operator))
+            }
+        }
+        ASTNodeType::OperandNode {value} => {
+             match value {
+                Token::Constant(Constant::Integer(int)) => {
+                    Ok(*int)
+                }
+                _ => Err(format!("{:?} is not an integer", value))
+            }
+        }
+        other => Err(format!("{:?} unexpected ast node type", other))
+    }
 }

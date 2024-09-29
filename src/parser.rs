@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::cmp::PartialEq;
+use std::io::read_to_string;
 use std::iter::Peekable;
 use std::os::unix::raw::mode_t;
 use std::rc::{Rc, Weak};
 use std::vec::IntoIter;
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Lexer};
 
-
+#[derive(Debug)]
 pub struct ASTNode {
     node_type: ASTNodeType,
     parent_node: Option<Weak<RefCell<ASTNode>>>,
@@ -27,7 +28,7 @@ impl ASTNode {
     }
 }
 
-
+#[derive(Debug)]
 pub enum ASTNodeType {
     Root,
     FnDeclaration{ fn_name: String, return_type: String},
@@ -40,12 +41,12 @@ pub enum ASTNodeType {
 
     //operators
     BinaryOperation {
-        operator: Operator,
+        operator: Token,
         right: Rc<RefCell<ASTNode>>,
         left: Rc<RefCell<ASTNode>>,
     },
     UnaryOperation {
-        operator: Operator,
+        operator: Token,
         operand: Rc<RefCell<ASTNode>>,
     },
     OperandNode {
@@ -55,6 +56,8 @@ pub enum ASTNodeType {
     //statements
     ReturnStatement(),
 }
+
+
 
 struct ExpressionParser {
     tokens: Vec<Token>,
@@ -77,7 +80,6 @@ impl ExpressionParser {
     }
 
     fn parse(&mut self, parent: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
-
         while !self.is_at_end() {
 
         }
@@ -109,34 +111,115 @@ impl ExpressionParser {
         }
     }
 
-    fn parse_expression(&mut self) -> Rc<RefCell<ASTNode>> {
+    fn parse_expression(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
         self.parse_additive()
     }
 
-    fn parse_additive(&mut self) -> Rc<RefCell<ASTNode>> {
-        let node = self.parse_multiplicative()
-        
+    fn parse_additive(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        let mut node = self.parse_multiplicative()?;
         loop {
             match self.peek() {
                 Token::Operator(Operator::Plus) => {
-                    self.consume();
+                    let operator = self.consume();
+                    let right = self.parse_additive()?;
+                    let plus_node = Self::create_binary_ast_node(operator, Rc::clone(&node), Rc::clone(&right));
+                    node = plus_node;
                 }
                 _ => break,
             }
         }
-        
-        node
+        Ok(node)
     }
 
-    fn parse_multiplicative(&mut self) -> Rc<RefCell<ASTNode>> {
-        self.parse_unary()
+    fn parse_multiplicative(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        let mut node = self.parse_unary()?;
+        loop {
+            match self.peek() {
+                Token::Operator(op) => {
+                    if op.is_unary() {
+                       return  Ok(self.parse_unary()?)
+                    } else {
+                        match self.peek() {
+                            Token::Operator(Operator::Multiplication) | Token::Operator(Operator::Division) => {
+                                let operator = self.consume();
+                                let right = self.parse_multiplicative()?;
+                                let binary_operator = Self::create_binary_ast_node(operator, node, right);
+                                node = binary_operator;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                _ => break
+            }
+        }
+        Ok(node)
     }
 
-    fn parse_unary(&mut self) -> Rc<RefCell<ASTNode>> {
-        self.parse_primary()
+    fn parse_unary(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        match self.peek() {
+            Token::Constant(_) => {
+                Ok(self.parse_primary()?)
+            }
+            Token::Operator(Operator::Minus) | Token::Operator(Operator::Tilde) |
+            Token::Operator(Operator::Not)=> {
+                let operator = self.consume();
+                let operand = self.parse_unary()?;
+                Ok(Self::create_unary_ast_node(operator, operand))
+            },
+            _ => return Err(String::from("illegal token"))
+        }
     }
 
-    fn parse_primary(&mut self) -> Rc<RefCell<ASTNode>> {
+    fn parse_primary(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        match self.peek() {
+            Token::Identifier(_) => {
+                Err("not supported".to_string())
+            }
+            Token::Constant(_) => {
+                Ok(Self::create_constant_ast_node(self.consume()))
+            }
+            Token::SpecialCharacter(_) => {
+                Err("not supported".to_string())
+            }
+            _ => Err(format!("unexpected token {:?}", self.peek())),
+        }
+    }
+
+    fn create_unary_ast_node(operator: Token, operand: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+        let unary = Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::UnaryOperation { operator, operand: Rc::clone(&operand)},
+            parent_node: None,
+            children_nodes: vec![],
+        }));
+        operand.borrow_mut().parent_node = Some(Rc::downgrade(&unary));
+        unary
+    }
+
+    fn create_binary_ast_node(operator: Token, left: Rc<RefCell<ASTNode>>, right: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+        let binary = Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::BinaryOperation {
+                operator,
+                right: Rc::clone(&right),
+                left: Rc::clone(&left),
+            },
+            parent_node: None,
+            children_nodes: vec![],
+        }));
+        left.borrow_mut().parent_node = Some(Rc::downgrade(&binary));
+        right.borrow_mut().parent_node = Some(Rc::downgrade(&binary));
+        binary
+    }
+
+    fn create_constant_ast_node(constant: Token) -> Rc<RefCell<ASTNode>> {
+        Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::OperandNode { value: constant},
+            parent_node: None,
+            children_nodes: vec![],
+        }))
+    }
+
+    fn print_ast_tree(root: Rc<RefCell<ASTNode>>) {
 
     }
 }
@@ -148,7 +231,7 @@ impl ExpressionParser {
 // Unary         ::= ('~' | '!' | '-') Unary | Primary
 // Primary       ::= NUMBER
 
-fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<RefCell<ASTNode>>) -> Result<(), String> {
+fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<RefCell<ASTNode>>) -> Result< Rc<RefCell<ASTNode>>, String> {
     let mut extracted_tokens: Vec<Token> = Vec::new();
     for token in tokens {
         match token {
@@ -169,9 +252,11 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
         }
     }
 
-
-
-    return Ok(())
+    let mut expression_parser = ExpressionParser::new(extracted_tokens);
+    if let Ok(expression_root) = expression_parser.parse_expression() {
+        return Ok(expression_root);
+    };
+    Err(String::from("Unexpected expression parse error"))
 }
 
 
@@ -224,16 +309,9 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                     parent_node: Some(Rc::downgrade(&current_node)),
                     children_nodes: Vec::new(),
                 }));
-                if let Some(Token::Constant(constant)) = token_iter.next() {
-                    if let Ok(parsed_const) = parse_const(constant, &return_node) {
-                        return_node.borrow_mut().children_nodes.push(parsed_const);
-                    }
-                    current_node.borrow_mut().children_nodes.push(return_node);
-                    if let Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) = token_iter.peek() {
-                        continue
-                    } else {
-                        return Err("no semicolon after return".to_string());
-                    }
+                if let Ok(expression_root) = parse_expression(&mut token_iter, &return_node) {
+                    expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&return_node));
+                    return_node.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
                 }
             }
             // Handle block end `}`
@@ -283,3 +361,45 @@ fn parse_const(constant: Constant, parent_node: &Rc<RefCell<ASTNode>>) -> Result
     }
     None
 }*/
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use crate::lexer::{Constant, Token};
+    use crate::lexer::Operator::{Minus, Multiplication, Plus};
+    use crate::parser::{ASTNode, ASTNodeType, ExpressionParser};
+
+    fn print_ast(node: &Rc<RefCell<ASTNode>>, depth: usize) {
+        let indent = "  ".repeat(depth);
+        let node_borrow = node.borrow();
+        println!("{}{:?}\n", indent, node_borrow);
+        for child in &node_borrow.children_nodes {
+            print_ast(child, depth + 1);
+        }
+    }
+
+    #[test]
+    fn test_expression_parser() {
+        let tokens = vec![
+            Token::Constant(Constant::Integer(3)),
+            Token::Operator(Plus),
+            Token::Operator(Minus),
+            Token::Constant(Constant::Integer(5)),
+            Token::Operator(Multiplication),
+            Token::Constant(Constant::Integer(2)),
+            Token::Operator(Plus),
+            Token::Constant(Constant::Integer(11)),
+        ];
+        let root_node = Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::Root,
+            parent_node: None,
+            children_nodes: vec![],
+        }));
+        let mut expression_parser = ExpressionParser::new(tokens);
+        let ast = expression_parser.parse_expression();
+
+        print_ast(&ast.unwrap(), 0);
+    }
+
+}

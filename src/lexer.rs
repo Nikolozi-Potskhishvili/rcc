@@ -38,19 +38,19 @@ pub enum Operator {
     Not,
     Xor,
     Modulo,
-    BitCompl,
+    Tilde,
 }
 
 impl Operator {
     pub fn is_unary(&self) -> bool {
         return match self {
-            Operator::Not | Operator::Minus | Operator::BitCompl => true,
+            Operator::Not | Operator::Minus | Operator::Tilde => true,
             _ => false,
         }
     }
     pub fn is_left_associative(&self) -> bool {
         return match self {
-            Operator::Minus | Operator::BitCompl | Operator::And
+            Operator::Minus | Operator::Tilde | Operator::And
             | Operator::Or | Operator::Plus => true,
             _ => false,
         }
@@ -59,7 +59,7 @@ impl Operator {
         return match self {
             Operator::Plus => 1,
             Operator::Division | Operator::Multiplication => 2,
-            Operator::Not | Operator::BitCompl | Operator::Minus => 3,
+            Operator::Not | Operator::Tilde | Operator::Minus => 3,
             _ => 0
         }
     }
@@ -107,7 +107,7 @@ impl Lexer {
 fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
     let mut cur_token = String::new();
     for char in s.chars() {
-        if let Some(operator) = get_operator(&char.to_string()) {
+        if let Ok(operator) = get_operator(&char.to_string()) {
             if let Some(token) = parse_long_token(&cur_token) {
                 result.push(token);
             }
@@ -183,7 +183,7 @@ fn get_operator(token: &str) -> Result<Operator, String> {
     match token {
         "!" => Ok(Operator::Not),
         "-" => Ok(Operator::Minus),
-        "~" => Ok(Operator::BitCompl),
+        "~" => Ok(Operator::Tilde),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }
