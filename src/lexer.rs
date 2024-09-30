@@ -1,5 +1,4 @@
 use std::ops::{Add, RangeBounds};
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Identifier(String),
@@ -9,6 +8,26 @@ pub enum Token {
     SpecialCharacter(SpecialCharacter),
     Comments(String),
     EndOFFile,
+}
+
+impl Token {
+    pub fn get_operator(&self) -> Option<Operator> {
+        match self {
+            Token::Operator(operator) => {
+                Some(operator.clone())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_constant(&self) -> Option<Constant> {
+        return match self {
+            Token::Constant(constant) => {
+                Some(constant.clone())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

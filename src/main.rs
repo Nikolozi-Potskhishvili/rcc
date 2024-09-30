@@ -5,11 +5,10 @@ use std::io::Write;
 use std::process::{Command, ExitStatus};
 use crate::codegen::generate_assembly;
 use crate::lexer::Lexer;
-use crate::parser::generate_ast_tree;
+use crate::parser::{generate_ast_tree, print_ast};
 
 mod lexer;
 mod parser;
-mod ast;
 mod semantic_analysis;
 mod codegen;
 
@@ -31,6 +30,7 @@ fn get_source_code(file_name: &String) -> String {
 fn compile_source_code(source_code: String) ->  ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
+    print_ast(&ast_tree, 0);
     let code = generate_assembly(ast_tree);
     for line in code.lines() {
         println!("{}", line);
@@ -52,9 +52,8 @@ mod tests {
     use std::process::Command;
     use crate::{compile_source_code, get_source_code};
 
-    #[test]
-    fn only_integer_return() {
-        let file_name = String::from("test.c");
+    fn test_helper(file_name: &str, expected_value: i32) -> std::thread::Result<()> {
+        let file_name = String::from(file_name);
         let source_code = get_source_code(&file_name);
         let result = panic::catch_unwind(|| {
             let compile_status = compile_source_code(source_code);
@@ -64,12 +63,43 @@ mod tests {
                 .expect("Failed to run assembly");
             assert!(!run_asm_status.success());
             let exit_code = run_asm_status.code().unwrap();
-            assert_eq!(exit_code, 2);
+            assert_eq!(exit_code, expected_value);
         });
+        result
+    }
 
+    fn clean_up_tests_files() {
         let _ = fs::remove_file("test").ok();
         let _ = fs::remove_file("test.s").ok();
+    }
+
+    #[test]
+    fn only_integer_return() {
+        let result = test_helper("test.c", 2);
+        clean_up_tests_files();
 
         result.expect("tests panicked");
+    }
+
+    #[test]
+    fn unary_operators_only_integers() {
+        let inputs = vec!(
+            String::from("./test_files/test_minus.c"),
+            String::from("./test_files/test_not_on_int.c"),
+            String::from("./test_files/test_tilde_on.c.c"),
+            String::from("./test_files/test_multi_layered_unary.c"));
+        let expected_outputs = vec!(
+            246,
+            0,
+            -11,
+            -1
+        );
+        for (index, input) in inputs.iter().enumerate() {
+            let expected_output = expected_outputs[index];
+            let result = test_helper(input, expected_output);
+            clean_up_tests_files();
+            result.expect("failed");
+        }
+
     }
 }

@@ -1,8 +1,8 @@
 use std::cell::RefCell;
-use std::fmt::format;
 use std::rc::Rc;
 use crate::lexer::{Constant, Operator, Token};
 use crate::parser::{ASTNode, ASTNodeType};
+
 pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
     let mut result = String::new();
     let cur_node = ast_root; // Keep as Rc<RefCell<ASTNode>>
@@ -31,9 +31,56 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
 
             ASTNodeType::Identifier(_) => {
             }
+            ASTNodeType::BinaryOperation { operator, right, left } => {
+               /* let operator_instruction = match operator {
+                    Operator::Plus => "addl",
+                    Operator::Division => "idvl",
+                    Operator::Multiplication => "idmul",
+                    _ => panic!("Unsupported binary operator"),
+                };
+                if *operator == Operator::Division {
+                    result += &generate_division_assembly(Rc::clone(&left), Rc::clone(&right));
+                } else {
+                    result += &format!("    # Binary operation: {:?}\n", operator_instruction);
+                    let left = generate_assembly(Rc::clone(left));
+                    let right = generate_assembly(Rc::clone(right));
+                    result += &left;
+                    result += &right;
+                    result += &format!("   {} %eax, %eax\n", operator_instruction);
+                }
+                let left_eval = generate_assembly(Rc::clone(left));
+                let right_eval = generate_assembly(Rc::clone(right));*/
+                return evaluate_integer_expression(&child).expect("Error parsing binary node").to_string();
 
+            }
+            ASTNodeType::UnaryOperation { operator, operand } => {
+                /*
+                let operator = match operator {
+                    Operator::Minus => "negl",
+                    Operator::Not | Operator::Tilde => "notl",
+                    _ => panic!("Expected unary operator, but got {:?}", operator),
+                };
+                result += &format!("    # Unary operation: {:?}\n", operator);
+                let operand = evaluate_integer_expression(&Rc::clone(operand)).expect("Error evaluating integer expression");
+                result += &operand.to_string();
+                result += &format!("   {}\n", operator);
+                */
+                return evaluate_integer_expression(&child).expect("Error parsing unary node").to_string();
+            }
+            ASTNodeType::OperandNode { value } => {
+                let constant = value.get_constant().expect("Error evaluating operand node");
+                let val = match constant {
+                    Constant::Integer(int) => int.to_string(),
+                    Constant::Short(short) => short.to_string(),
+                    Constant::Long(long) => long.to_string(),
+                    Constant::Double(double) => double.to_string(),
+                    Constant::Float(float) => float.to_string(),
+                    Constant::Char(char) => char.to_string(),
+                };
+                result += &val.to_string();
+            }
             ASTNodeType::ReturnStatement() => {
-                let return_val = evaluate_integer_expression(&child).expect("error during integer expression evaluation");
+                let return_val = generate_assembly(Rc::clone(child));
                 result += &format!("    movl    ${}, %eax\n", return_val);
                 result += "    ret\n";
             }
@@ -44,6 +91,13 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
     result
 }
 
+fn generate_division_assembly(left: Rc<RefCell<ASTNode>>, right: Rc<RefCell<ASTNode>>) -> String {
+    let mut asm = String::new();
+    asm += "Binary Operation: Division\n";
+    asm += "    cltd\n";
+    asm += "    idivl %eax\n";
+    asm
+}
 
 fn evaluate_integer_expression(expression_root: &Rc<RefCell<ASTNode>>) -> Result<i32, String> {
     match &expression_root.borrow().get_type() {
@@ -51,30 +105,25 @@ fn evaluate_integer_expression(expression_root: &Rc<RefCell<ASTNode>>) -> Result
             let eval_left = evaluate_integer_expression(left);
             let eval_right = evaluate_integer_expression(right);
             match operator {
-                Token::Operator(op) => {
-                    match op {
-                        Operator::Plus => Ok(eval_left? + eval_right?),
-                        Operator::Division => Ok(eval_left? / eval_right?),
-                        Operator::Multiplication => Ok(eval_left? * eval_right?),
-                        _ => Err(format!("{:?} invalid binary operator", op))
-
-                    }
-                }
-                _ => Err(format!("{:?} is not an operator", operator))
+                    Operator::Plus => Ok(eval_left? + eval_right?),
+                    Operator::Division => Ok(eval_left? / eval_right?),
+                    Operator::Multiplication => Ok(eval_left? * eval_right?),
+                    _ => Err(format!("{:?} invalid binary operator", operator)),
             }
         }
         ASTNodeType::UnaryOperation { operator, operand } => {
-            let eval_operand = evaluate_integer_expression(operand);
+            let eval_operand = evaluate_integer_expression(operand).expect("Error evaluating unary node");
             match operator {
-                Token::Operator(op) => {
-                    match op {
-                        Operator::Minus => Ok( - eval_operand?),
-                        Operator::Not => Ok(!eval_operand?),
-                        Operator::Tilde => Ok(!eval_operand?),
-                        _ => Err(format!("{:?} invalid unary operator", op))
+                Operator::Minus => Ok(-eval_operand),
+                Operator::Not => {
+                    if eval_operand == 0 {
+                        Ok(1)
+                    } else {
+                        Ok(0)
                     }
-                }
-                _ => Err(format!("{:?} no an unary operator", operator))
+                },
+                Operator::Tilde => Ok(!eval_operand),
+                _ => Err(format!("{:?} invalid unary operator", operator))
             }
         }
         ASTNodeType::OperandNode {value} => {

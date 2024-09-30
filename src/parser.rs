@@ -1,8 +1,7 @@
 use std::cell::RefCell;
 use std::cmp::PartialEq;
-use std::io::read_to_string;
+use std::fmt::format;
 use std::iter::Peekable;
-use std::os::unix::raw::mode_t;
 use std::rc::{Rc, Weak};
 use std::vec::IntoIter;
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Lexer};
@@ -41,12 +40,12 @@ pub enum ASTNodeType {
 
     //operators
     BinaryOperation {
-        operator: Token,
+        operator: Operator,
         right: Rc<RefCell<ASTNode>>,
         left: Rc<RefCell<ASTNode>>,
     },
     UnaryOperation {
-        operator: Token,
+        operator: Operator,
         operand: Rc<RefCell<ASTNode>>,
     },
     OperandNode {
@@ -79,13 +78,6 @@ impl ExpressionParser {
             || self.tokens[self.current_token] == Token::SpecialCharacter(SpecialCharacter::SemiColon)
     }
 
-    fn parse(&mut self, parent: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
-        while !self.is_at_end() {
-
-        }
-        parent
-    }
-
     fn peek(&self) -> &Token {
         if self.is_at_end() {
             &Token::EndOFFile
@@ -116,7 +108,11 @@ impl ExpressionParser {
     }
 
     fn parse_additive(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
-        let mut node = self.parse_multiplicative()?;
+        let mut node = self.parse_multiplicative().unwrap_or_else(|_| Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::OperandNode { value: Token::Constant(Constant::Integer(0)) },
+            parent_node: None,
+            children_nodes: vec![],
+        })));
         loop {
             match self.peek() {
                 Token::Operator(Operator::Plus) => {
@@ -186,9 +182,10 @@ impl ExpressionParser {
         }
     }
 
-    fn create_unary_ast_node(operator: Token, operand: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+    fn create_unary_ast_node(token: Token, operand: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+        let unary_operator = token.get_operator().expect("not found unary operator during constructing node");
         let unary = Rc::new(RefCell::new(ASTNode {
-            node_type: ASTNodeType::UnaryOperation { operator, operand: Rc::clone(&operand)},
+            node_type: ASTNodeType::UnaryOperation {operator: unary_operator, operand: Rc::clone(&operand)},
             parent_node: None,
             children_nodes: vec![],
         }));
@@ -196,10 +193,11 @@ impl ExpressionParser {
         unary
     }
 
-    fn create_binary_ast_node(operator: Token, left: Rc<RefCell<ASTNode>>, right: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+    fn create_binary_ast_node(token: Token, left: Rc<RefCell<ASTNode>>, right: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
+        let binary_operator = token.get_operator().expect("not found binary operator during constructing node");
         let binary = Rc::new(RefCell::new(ASTNode {
             node_type: ASTNodeType::BinaryOperation {
-                operator,
+                operator: binary_operator,
                 right: Rc::clone(&right),
                 left: Rc::clone(&left),
             },
@@ -251,9 +249,12 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
             _ => return Err(format!("Unexpected token {:?}", token)),
         }
     }
-
+    for val in &extracted_tokens {
+        println!("{}", format!("{:?} token", val));
+    }
     let mut expression_parser = ExpressionParser::new(extracted_tokens);
     if let Ok(expression_root) = expression_parser.parse_expression() {
+        print_ast(&expression_root, 0);
         return Ok(expression_root);
     };
     Err(String::from("Unexpected expression parse error"))
@@ -309,9 +310,13 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                     parent_node: Some(Rc::downgrade(&current_node)),
                     children_nodes: Vec::new(),
                 }));
+                current_node.borrow_mut().children_nodes.push(Rc::clone(&return_node));
                 if let Ok(expression_root) = parse_expression(&mut token_iter, &return_node) {
+                    println!("parsed expression after return");
                     expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&return_node));
                     return_node.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
+                } else {
+                    panic!("could not parse expression");
                 }
             }
             // Handle block end `}`
@@ -332,21 +337,6 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
     Ok(root)
 }
 
-fn parse_const(constant: Constant, parent_node: &Rc<RefCell<ASTNode>>) -> Result<Rc<RefCell<ASTNode>>, String> {
-    match constant {
-        Constant::Integer(int) => {
-            Ok(Rc::new(RefCell::new(ASTNode {
-                node_type: ASTNodeType::IntegerLiteral(int),
-                parent_node: Some(Rc::downgrade(parent_node)),
-                children_nodes: Vec::new(),
-            })))
-        }
-        _ => Err("Error during parsing constant. {constant:?} is not valid".to_string())
-    }
-}
-
-
-
 /*fn get_fn_dec_node_by_name<'a>(fn_name: &str, root_node: &'a ASTNode) -> Option<&'a ASTNode> {
     if root_node.children_nodes.is_empty() {
         return match root_node.node_type {
@@ -362,33 +352,32 @@ fn parse_const(constant: Constant, parent_node: &Rc<RefCell<ASTNode>>) -> Result
     None
 }*/
 
+pub fn print_ast(node: &Rc<RefCell<ASTNode>>, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let node_borrow = node.borrow();
+    println!("{}{:?}\n", indent, node_borrow);
+    for child in &node_borrow.children_nodes {
+        print_ast(child, depth + 1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use crate::lexer::{Constant, Token};
-    use crate::lexer::Operator::{Minus, Multiplication, Plus};
-    use crate::parser::{ASTNode, ASTNodeType, ExpressionParser};
-
-    fn print_ast(node: &Rc<RefCell<ASTNode>>, depth: usize) {
-        let indent = "  ".repeat(depth);
-        let node_borrow = node.borrow();
-        println!("{}{:?}\n", indent, node_borrow);
-        for child in &node_borrow.children_nodes {
-            print_ast(child, depth + 1);
-        }
-    }
+    use crate::parser::{print_ast, ASTNode, ASTNodeType, ExpressionParser};
 
     #[test]
     fn test_expression_parser() {
         let tokens = vec![
             Token::Constant(Constant::Integer(3)),
-            Token::Operator(Plus),
-            Token::Operator(Minus),
+            Token::Operator(crate::lexer::Operator::Plus),
+            Token::Operator(crate::lexer::Operator::Minus),
             Token::Constant(Constant::Integer(5)),
-            Token::Operator(Multiplication),
+            Token::Operator(crate::lexer::Operator::Multiplication),
             Token::Constant(Constant::Integer(2)),
-            Token::Operator(Plus),
+            Token::Operator(crate::lexer::Operator::Plus),
             Token::Constant(Constant::Integer(11)),
         ];
         let root_node = Rc::new(RefCell::new(ASTNode {
