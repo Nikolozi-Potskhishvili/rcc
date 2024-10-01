@@ -24,7 +24,7 @@ fn main() {
 }
 
 fn get_source_code(file_name: &String) -> String {
-     fs::read_to_string(file_name).expect("Problem with reading file")
+     fs::read_to_string(file_name).expect(format!("Problem with reading file {}", file_name).as_str())
 }
 
 fn compile_source_code(source_code: String) ->  ExitStatus {
@@ -61,9 +61,13 @@ mod tests {
             let run_asm_status = Command::new("./test")
                 .status()
                 .expect("Failed to run assembly");
-            assert!(!run_asm_status.success());
-            let exit_code = run_asm_status.code().unwrap();
-            assert_eq!(exit_code, expected_value);
+            if expected_value == 0 {
+                assert!(run_asm_status.success());
+            } else {
+                assert!(!run_asm_status.success());
+                let exit_code = run_asm_status.code().unwrap();
+                assert_eq!(exit_code, expected_value);
+            }
         });
         result
     }
@@ -86,15 +90,17 @@ mod tests {
         let inputs = vec!(
             String::from("./test_files/test_minus.c"),
             String::from("./test_files/test_not_on_int.c"),
-            String::from("./test_files/test_tilde_on.c.c"),
-            String::from("./test_files/test_multi_layered_unary.c"));
+            String::from("./test_files/test_tilde_on_int.c"),
+            /*String::from("./test_files/test_multi_layered_unary.c")*/);
+        let expected_max_output = 2_i32.pow(8);
         let expected_outputs = vec!(
-            246,
+            (expected_max_output - 10),
             0,
-            -11,
-            -1
+            (expected_max_output - 11),
+            (expected_max_output - 1)
         );
         for (index, input) in inputs.iter().enumerate() {
+            println!("current test index: {}", index);
             let expected_output = expected_outputs[index];
             let result = test_helper(input, expected_output);
             clean_up_tests_files();

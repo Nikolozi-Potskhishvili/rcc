@@ -62,20 +62,20 @@ pub enum Operator {
 
 impl Operator {
     pub fn is_unary(&self) -> bool {
-        return match self {
+        match self {
             Operator::Not | Operator::Minus | Operator::Tilde => true,
             _ => false,
         }
     }
     pub fn is_left_associative(&self) -> bool {
-        return match self {
+        match self {
             Operator::Minus | Operator::Tilde | Operator::And
             | Operator::Or | Operator::Plus => true,
             _ => false,
         }
     }
     pub fn get_precedence(&self) -> i32 {
-        return match self {
+        match self {
             Operator::Plus => 1,
             Operator::Division | Operator::Multiplication => 2,
             Operator::Not | Operator::Tilde | Operator::Minus => 3,
@@ -125,15 +125,24 @@ impl Lexer {
 /// this function parses string which certainly contains at least one token
 fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
     let mut cur_token = String::new();
+    let mut open_parentheses = 0;
     for char in s.chars() {
         if let Ok(operator) = get_operator(&char.to_string()) {
             if let Some(token) = parse_long_token(&cur_token) {
-                result.push(token);
+                result.push(token.clone());
+                if let Token::Constant(constant) = token {
+                    if open_parentheses > 0 {
+                        result.push(Token::SpecialCharacter(SpecialCharacter::RightParenthesis));
+                        open_parentheses -= 1;
+                    }
+                }
             }
             cur_token = String::new();
             match operator {
                 Operator::Minus => {
+                    result.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
                     result.push(Token::Operator(Operator::Plus));
+                    open_parentheses += 1;
                 },
                 _ => {},
             }

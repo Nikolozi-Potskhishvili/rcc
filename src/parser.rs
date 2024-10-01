@@ -163,7 +163,7 @@ impl ExpressionParser {
                 let operand = self.parse_unary()?;
                 Ok(Self::create_unary_ast_node(operator, operand))
             },
-            _ => return Err(String::from("illegal token"))
+            _ => Err(String::from("illegal token"))
         }
     }
 
@@ -175,8 +175,8 @@ impl ExpressionParser {
             Token::Constant(_) => {
                 Ok(Self::create_constant_ast_node(self.consume()))
             }
-            Token::SpecialCharacter(_) => {
-                Err("not supported".to_string())
+            Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
+                self.parse_expression()
             }
             _ => Err(format!("unexpected token {:?}", self.peek())),
         }
@@ -233,19 +233,10 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
     let mut extracted_tokens: Vec<Token> = Vec::new();
     for token in tokens {
         match token {
-            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_) => { extracted_tokens.push(token); },
-            Token::SpecialCharacter(character) => {
-                match character {
-                    SpecialCharacter::LeftParenthesis => {
-
-                    }
-                    SpecialCharacter::RightParenthesis => {
-
-                    }
-                    SpecialCharacter::SemiColon => { break;}
-                    _ => return Err(format!("Special character {:?} not supported", character)),
-                }
-            }
+            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
+            | Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) | Token::SpecialCharacter(SpecialCharacter::RightParenthesis)
+            => { extracted_tokens.push(token); },
+            Token::SpecialCharacter(SpecialCharacter::SemiColon) => break,
             _ => return Err(format!("Unexpected token {:?}", token)),
         }
     }
