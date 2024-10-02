@@ -20,14 +20,13 @@ fn main() {
     let file_name = &args[1];
     let source_code = get_source_code(file_name);
     compile_source_code(source_code);
-
 }
 
 fn get_source_code(file_name: &String) -> String {
      fs::read_to_string(file_name).expect(format!("Problem with reading file {}", file_name).as_str())
 }
 
-fn compile_source_code(source_code: String) ->  ExitStatus {
+fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
     for token in &tokens {
         println!("{:?}", token);
@@ -47,6 +46,8 @@ fn compile_source_code(source_code: String) ->  ExitStatus {
         .expect("Failed to compile assembly");
     compile_status
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -94,7 +95,7 @@ mod tests {
             String::from("./test_files/test_minus.c"),
             String::from("./test_files/test_not_on_int.c"),
             String::from("./test_files/test_tilde_on_int.c"),
-            /*String::from("./test_files/test_multi_layered_unary.c")*/);
+            String::from("./test_files/test_multi_layered_unary.c"));
         let expected_max_output = 2_i32.pow(8);
         let expected_outputs = vec!(
             (expected_max_output - 10),
@@ -110,5 +111,23 @@ mod tests {
             result.expect("failed");
         }
 
+    }
+
+    #[test]
+    fn test_sum() {
+        let file_name = String::from("./test_files/test_sum_of_two.c");
+        let result = test_helper(&file_name, 6);
+        clean_up_tests_files();
+        result.expect("failed");
+    }
+
+    #[test]
+    fn test_mixed_ar_expressions() {
+        let file_name = String::from("./test_files/test_mult_of_sums.c");
+        let expected_val = 45;
+
+        let result = test_helper(&file_name, expected_val);
+        clean_up_tests_files();
+        result.expect("failed");
     }
 }

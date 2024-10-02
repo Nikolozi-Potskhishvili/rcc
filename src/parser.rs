@@ -108,14 +108,17 @@ impl ExpressionParser {
     }
 
     fn parse_additive(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        println!("{:?} before parsing parsing unary in additive", self.peek());
         let mut node = self.parse_multiplicative().unwrap_or_else(|_| Rc::new(RefCell::new(ASTNode {
             node_type: ASTNodeType::OperandNode { value: Token::Constant(Constant::Integer(0)) },
             parent_node: None,
             children_nodes: vec![],
         })));
+        println!("{:?} after parsing parsing unary additive", self.peek());
         loop {
             match self.peek() {
                 Token::Operator(Operator::Plus) => {
+                    println!("plus parsed");
                     let operator = self.consume();
                     let right = self.parse_additive()?;
                     let plus_node = Self::create_binary_ast_node(operator, Rc::clone(&node), Rc::clone(&right));
@@ -128,10 +131,13 @@ impl ExpressionParser {
     }
 
     fn parse_multiplicative(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        println!("{:?} before parsing parsing unary in mutli", self.peek());
         let mut node = self.parse_unary()?;
+        println!("{:?} after parsing unary in multi", self.peek());
         loop {
             match self.peek() {
                 Token::Operator(op) => {
+                    println!("{:?} found operator", op);
                     if op.is_unary() {
                        return  Ok(self.parse_unary()?)
                     } else {
@@ -153,8 +159,9 @@ impl ExpressionParser {
     }
 
     fn parse_unary(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
+        println!("{:?} during parsing unary", self.peek());
         match self.peek() {
-            Token::Constant(_) => {
+            Token::Constant(_) | Token::SpecialCharacter(_) => {
                 Ok(self.parse_primary()?)
             }
             Token::Operator(Operator::Minus) | Token::Operator(Operator::Tilde) |
@@ -173,7 +180,7 @@ impl ExpressionParser {
                 Err("not supported".to_string())
             }
             Token::Constant(_) => {
-                println!("{}", format!("{:?}", self.peek()));
+                println!("constant is {}", format!("{:?}", self.peek()));
                 Ok(Self::create_constant_ast_node(self.consume()))
             }
             Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
@@ -248,7 +255,6 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
     }
     let mut expression_parser = ExpressionParser::new(extracted_tokens);
     if let Ok(expression_root) = expression_parser.parse_expression() {
-        //print_ast(&expression_root, 0);
         return Ok(expression_root);
     };
     Err(String::from("Unexpected expression parse error"))

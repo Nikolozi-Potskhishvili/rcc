@@ -23,7 +23,7 @@ impl Token {
     }
 
     pub fn get_constant(&self) -> Option<Constant> {
-        return match self {
+        match self {
             Token::Constant(constant) => {
                 Some(constant.clone())
             }
@@ -60,6 +60,7 @@ pub enum Operator {
     Xor,
     Modulo,
     Tilde,
+    Less,
 }
 
 impl Operator {
@@ -177,7 +178,7 @@ enum FoundLongToken {
 
 impl FoundLongToken {
     fn get_tokens(self) -> Vec<Token> {
-        return match self {
+        match self {
             Found(new_tokens) => new_tokens,
             NotFound(old_tokens) => old_tokens,
         }
@@ -236,9 +237,14 @@ fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
 
 fn get_operator(token: &str) -> Result<Operator, String> {
     match token {
+        "+" => Ok(Operator::Plus),
+        "*" => Ok(Operator::Multiplication),
+        "/" => Ok(Operator::Division),
         "!" => Ok(Operator::Not),
         "-" => Ok(Operator::Minus),
         "~" => Ok(Operator::Tilde),
+        "=" => Ok(Operator::Equals),
+        "<" => Ok(Operator::Less),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }
@@ -332,10 +338,10 @@ mod tests {
     fn for_loop() {
         let input_regular = "for(int i = 0; i < 1; i++) {";
         let input_minimal_spaces= "for(int i=0; i<1;i++){";
-
         let first_output = Lexer::tokenize(&input_regular);
         let second_output = Lexer::tokenize(&input_minimal_spaces);
-
+        first_output.iter().for_each(|cur| println!("{:?} cur token", cur));
+        second_output.iter().for_each(|cur| println!("{:?} cur token", cur));
         assert_eq!(first_output.len(), second_output.len());
     }
 
