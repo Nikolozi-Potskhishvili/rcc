@@ -1,4 +1,6 @@
 use std::ops::{Add, RangeBounds};
+use crate::lexer::FoundLongToken::{Found, NotFound};
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Identifier(String),
@@ -111,69 +113,94 @@ pub struct Lexer;
 impl Lexer {
 
     pub fn tokenize(source_code: &str) -> Vec<Token> {
-        let mut result : Vec<Token> = Vec::new();
-        let mut cur_token = String::new();
-
-        for line in source_code.lines() {
-            for s in line.split_whitespace() {
-                parse_token_helper(s, &mut result);
-            }
-        }
+        let mut result = Vec::new();
+        source_code.lines()
+            .for_each(|line| {
+                line.split_whitespace()
+                    .for_each(|word|  {
+                        result.extend(parse_token_helper(word));
+                    });
+            });
         result
     }
 }
 /// this function parses string which certainly contains at least one token
-fn parse_token_helper(s: &str, result: &mut Vec<Token>) {
-    let mut cur_token = String::new();
-    let mut open_parentheses = 0;
-    for char in s.chars() {
-        if let Ok(operator) = get_operator(&char.to_string()) {
-            if let Some(token) = parse_long_token(&cur_token) {
-                result.push(token.clone());
-                if let Token::Constant(constant) = token {
-                    if open_parentheses > 0 {
-                        result.push(Token::SpecialCharacter(SpecialCharacter::RightParenthesis));
-                        open_parentheses -= 1;
+fn parse_token_helper(s: &str) -> Vec<Token> {
+    let (mut tokens, mut cur_token, mut open_parentheses) = s.chars()
+        .fold(
+            (Vec::new(), String::new(), 0),
+            |(mut tokens, mut cur_token, mut open_parentheses), char| {
+                if let Ok(operator) = get_operator(&char.to_string()) {
+                    tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+                    cur_token.clear();
+                    match operator {
+                        Operator::Minus => {
+                            tokens.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
+                            tokens.push(Token::Operator(Operator::Plus));
+                            open_parentheses += 1;
+                        },
+                        _ => {},
                     }
+                    tokens.push(Token::Operator(operator));
+                } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
+                   tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+                   cur_token.clear();
+                   tokens.push(Token::SpecialCharacter(special_symbol));
+                } else {
+                    cur_token.push(char);
                 }
-            }
-            cur_token = String::new();
-            match operator {
-                Operator::Minus => {
-                    result.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
-                    result.push(Token::Operator(Operator::Plus));
-                    open_parentheses += 1;
-                },
-                _ => {},
-            }
-            result.push(Token::Operator(operator));
-        } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
-            if let Some(token) = parse_long_token(&cur_token) {
-                result.push(token);
-            }
-            cur_token = String::new();
-            result.push(Token::SpecialCharacter(special_symbol));
-        } else {
-            cur_token.push(char);
-        }
-    }
-    if !cur_token.is_empty() {
-        if let Some(token) = parse_long_token(&cur_token) {
-            result.push(token);
-        }
-   }
+                (tokens, cur_token, open_parentheses)
+            });
+        tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+        tokens
 }
+
+
+
 /// parses long tokens such as keywords, constants and identifiers
 fn parse_long_token(s: &str) -> Option<Token> {
     if s.is_empty() {
-        return None;
-    }
-    if let Ok(keyword) = get_keyword(s) {
-        return Some(Token::Keyword(keyword))
+        None
+    } else if let Ok(keyword) = get_keyword(s) {
+         Some(Token::Keyword(keyword))
     } else if is_const_integer(s) {
-        return Some(Token::Constant(Constant::Integer(s.parse::<i32>().unwrap())))
+         Some(Token::Constant(Constant::Integer(s.parse::<i32>().unwrap())))
+    } else {
+        Some(Token::Identifier(s.to_string()))
     }
-    Some(Token::Identifier(s.to_string()))
+}
+
+enum FoundLongToken {
+    Found(Vec<Token>),
+    NotFound(Vec<Token>),
+}
+
+impl FoundLongToken {
+    fn get_tokens(self) -> Vec<Token> {
+        return match self {
+            Found(new_tokens) => new_tokens,
+            NotFound(old_tokens) => old_tokens,
+        }
+    }
+}
+
+fn process_long_token(
+    cur_token: &str,
+    mut tokens: Vec<Token>,
+    open_parentheses: &mut usize,
+) -> FoundLongToken {
+    if let Some(token) = parse_long_token(&cur_token) {
+        tokens.push(token.clone());
+        if let Token::Constant(_) = token {
+            if *open_parentheses > 0 {
+                tokens.push(Token::SpecialCharacter(SpecialCharacter::RightParenthesis));
+                *open_parentheses -= 1;
+            }
+        }
+        Found(tokens)
+    } else{
+        NotFound(tokens)
+    }
 }
 
 fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {

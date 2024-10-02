@@ -173,10 +173,17 @@ impl ExpressionParser {
                 Err("not supported".to_string())
             }
             Token::Constant(_) => {
+                println!("{}", format!("{:?}", self.peek()));
                 Ok(Self::create_constant_ast_node(self.consume()))
             }
             Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
-                self.parse_expression()
+                self.consume();
+                let inner_expression =  self.parse_expression()?;
+                if let Token::SpecialCharacter(SpecialCharacter::RightParenthesis) = self.consume() {
+                    Ok(inner_expression)
+                } else {
+                    Err(String::from("Expected closing right parenthesis"))
+                }
             }
             _ => Err(format!("unexpected token {:?}", self.peek())),
         }
@@ -216,10 +223,6 @@ impl ExpressionParser {
             children_nodes: vec![],
         }))
     }
-
-    fn print_ast_tree(root: Rc<RefCell<ASTNode>>) {
-
-    }
 }
 
 // current grammar:
@@ -245,7 +248,7 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
     }
     let mut expression_parser = ExpressionParser::new(extracted_tokens);
     if let Ok(expression_root) = expression_parser.parse_expression() {
-        print_ast(&expression_root, 0);
+        //print_ast(&expression_root, 0);
         return Ok(expression_root);
     };
     Err(String::from("Unexpected expression parse error"))
