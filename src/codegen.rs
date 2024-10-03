@@ -22,7 +22,8 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
                 result += &generate_assembly(Rc::clone(child));
             }
 
-            ASTNodeType::VarDecl { .. } => {
+            ASTNodeType::VarDecl { var_name, var_type } => {
+
             }
 
             ASTNodeType::IntegerLiteral(number) => {
@@ -76,6 +77,7 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
                     Constant::Double(double) => double.to_string(),
                     Constant::Float(float) => float.to_string(),
                     Constant::Char(char) => char.to_string(),
+                    Constant::Undefined => panic!("")
                 };
                 result += &val.to_string();
             }

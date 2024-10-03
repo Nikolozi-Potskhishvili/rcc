@@ -95,6 +95,7 @@ pub enum Constant {
     Double(f32),
     Float(f64),
     Char(char),
+    Undefined,
 }
 
 #[derive(Debug, PartialEq, Clone)]

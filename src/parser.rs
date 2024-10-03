@@ -5,6 +5,7 @@ use std::iter::Peekable;
 use std::rc::{Rc, Weak};
 use std::vec::IntoIter;
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Lexer};
+use crate::semantic_analysis::SemanticAnalyzer;
 
 #[derive(Debug)]
 pub struct ASTNode {
@@ -108,13 +109,13 @@ impl ExpressionParser {
     }
 
     fn parse_additive(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
-        println!("{:?} before parsing parsing unary in additive", self.peek());
+        println!("{:?} before parsing parsing multi in additive", self.peek());
         let mut node = self.parse_multiplicative().unwrap_or_else(|_| Rc::new(RefCell::new(ASTNode {
             node_type: ASTNodeType::OperandNode { value: Token::Constant(Constant::Integer(0)) },
             parent_node: None,
             children_nodes: vec![],
         })));
-        println!("{:?} after parsing parsing unary additive", self.peek());
+        println!("{:?} after parsing parsing multi additive", self.peek());
         loop {
             match self.peek() {
                 Token::Operator(Operator::Plus) => {
@@ -241,6 +242,7 @@ impl ExpressionParser {
 
 fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<RefCell<ASTNode>>) -> Result< Rc<RefCell<ASTNode>>, String> {
     let mut extracted_tokens: Vec<Token> = Vec::new();
+
     for token in tokens {
         match token {
             Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
@@ -260,15 +262,13 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>, current_node: &Rc<Re
     Err(String::from("Unexpected expression parse error"))
 }
 
-
-
 pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>, String> {
     let root = Rc::new(RefCell::new(ASTNode {
         node_type: ASTNodeType::Root,
         parent_node: None,
         children_nodes: Vec::new(),
     }));
-
+    let mut semantic_analyzer = SemanticAnalyzer::new();
     let mut current_node = Rc::clone(&root);
     let mut token_iter = tokens.into_iter().peekable();
 
@@ -299,6 +299,38 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                                 }
                             }
                         }
+                    } else {
+                        let int_var_node = Rc::new(RefCell::new(ASTNode {
+                            node_type: ASTNodeType::VarDecl { var_name: name.to_string(), var_type: "int".to_string() },
+                            parent_node: Some(Rc::downgrade(&current_node)),
+                            children_nodes: vec![],
+                        }));
+                        current_node.borrow_mut().children_nodes.push(Rc::clone(&int_var_node));
+                        token_iter.next();
+                        if let Some(next_token) = token_iter.peek() {
+                            match next_token {
+                                Token::Operator(Operator::Equals) => {
+                                    token_iter.next();
+                                    let parsing_result = parse_expression(&mut token_iter, &int_var_node);
+                                    if let Ok(expression_root) =  parsing_result {
+                                        println!("Expression root = {:?}", expression_root);
+                                        expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&int_var_node));
+                                        int_var_node.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
+                                    } else if let Err(error) = parsing_result {
+                                        println!("{}", error);
+                                        panic!("invalid expression after declaring integer variable");
+                                    }
+                                }
+                                Token::SpecialCharacter(SpecialCharacter::SemiColon) => {
+                                    token_iter.next();
+                                    continue
+                                }
+                                _ => return Err(String::from("unexpected token")),
+                            }
+                        } else {
+                            panic!("unexpected token {:?} after declaring integer variable", token_iter.peek().unwrap());
+                        }
+
                     }
                 }
             }
@@ -329,7 +361,32 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                 }
                 continue;
             }
+            Token::Identifier(identifier) => {
+                match token_iter.peek().expect("expect tokens after identifier") {
+                    // identifier is function call
+                    Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
 
+                    }
+                    // identifier is treated as variable assignment
+                    Token::Operator(Operator::Equals) => {
+                        token_iter.next();
+                        let var_node = Rc::new(RefCell::new(ASTNode {
+                            node_type: ASTNodeType::Root,
+                            parent_node: Some(Rc::downgrade(&current_node)),
+                            children_nodes: vec![],
+                        }));
+                        if let Ok(expression_root) = parse_expression(&mut token_iter, &var_node) {
+                            var_node.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
+                            expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&current_node));
+                        }  else {
+                            panic!("could not parse expression");
+                        }
+                    }
+                    _ => {
+
+                    }
+                }
+            }
             // Skip any other tokens or syntax we don't support
             _ => continue,
         }
@@ -365,8 +422,8 @@ pub fn print_ast(node: &Rc<RefCell<ASTNode>>, depth: usize) {
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
-    use crate::lexer::{Constant, Token};
-    use crate::parser::{print_ast, ASTNode, ASTNodeType, ExpressionParser};
+    use crate::lexer::{Constant, Keyword, Operator, SpecialCharacter, Token};
+    use crate::parser::{generate_ast_tree, print_ast, ASTNode, ASTNodeType, ExpressionParser};
 
     #[test]
     fn test_expression_parser() {
@@ -389,6 +446,28 @@ mod tests {
         let ast = expression_parser.parse_expression();
 
         print_ast(&ast.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_simple_var_dec() {
+        let tokens = vec![
+            Token::Keyword(Keyword::Integer),
+            Token::Identifier("main".to_string()),
+            Token::SpecialCharacter(SpecialCharacter::LeftParenthesis),
+            Token::SpecialCharacter(SpecialCharacter::RightParenthesis),
+            Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket),
+            Token::Keyword(Keyword::Integer),
+            Token::Identifier("var".to_string()),
+            Token::Operator(Operator::Equals),
+            Token::Constant(Constant::Integer(11)),
+            Token::SpecialCharacter(SpecialCharacter::SemiColon),
+            Token::Keyword(Keyword::Return),
+            Token::Constant(Constant::Integer(5)),
+            Token::SpecialCharacter(SpecialCharacter::SemiColon),
+            Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket),
+        ];
+        let mut expression_parser = generate_ast_tree(tokens).unwrap();
+        print_ast(&expression_parser, 0);
     }
 
 }
