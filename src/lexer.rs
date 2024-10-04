@@ -9,8 +9,11 @@ pub enum Token {
     Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
+    Type,
     EndOFFile,
 }
+
+
 
 impl Token {
     pub fn get_operator(&self) -> Option<Operator> {
@@ -33,12 +36,20 @@ impl Token {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Keyword {
-    Return,
+pub enum Type {
     Integer,
-    Double,
     Float,
+    Double,
     Char,
+    Short,
+    Long,
+    Void,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Keyword {
+    Type(Type),
+    Return,
     Void,
     For,
     While,
@@ -96,6 +107,21 @@ pub enum Constant {
     Float(f64),
     Char(char),
     Undefined,
+}
+
+impl Constant {
+    pub fn get_type(&self) -> Type {
+       match self {
+           Constant::Integer(_) => Type::Integer,
+           Constant::Short(_) => Type::Short,
+           Constant::Long(_) => Type::Long,
+           Constant::Double(_) => Type::Double,
+           Constant::Float(_) => Type::Float,
+           Constant::Char(_) => Type::Char,
+           Constant::Undefined => Type::Void
+       }
+    }
+
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -226,7 +252,7 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
 
 fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
      match token {
-        "int" => Ok(Keyword::Integer),
+        "int" => Ok(Keyword::Type(Type::Integer)),
         "for" => Ok(Keyword::For),
         "while" => Ok(Keyword::While),
         "if" => Ok(Keyword::If),

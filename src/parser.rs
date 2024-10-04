@@ -1,11 +1,9 @@
 use std::cell::RefCell;
 use std::cmp::PartialEq;
-use std::fmt::format;
 use std::iter::Peekable;
 use std::rc::{Rc, Weak};
 use std::vec::IntoIter;
-use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Lexer};
-use crate::semantic_analysis::SemanticAnalyzer;
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type};
 
 #[derive(Debug)]
 pub struct ASTNode {
@@ -23,6 +21,7 @@ impl ASTNode {
         &self.parent_node
     }
 
+
     pub fn get_children_nodes(&self) -> &Vec<Rc<RefCell<ASTNode>>> {
         &self.children_nodes
     }
@@ -33,10 +32,9 @@ pub enum ASTNodeType {
     Root,
     FnDeclaration{ fn_name: String, return_type: String},
 
-    VarDecl { var_name: String, var_type: String},
-
+    VarDecl { var_name: String, var_type: Type},
+    VarAssignment {var_name: String, },
     //Expressions
-    IntegerLiteral(i32),
     Identifier(String),
 
     //operators
@@ -52,9 +50,12 @@ pub enum ASTNodeType {
     OperandNode {
         value: Token,
     },
-
+    VarCallNode {
+        var_name: String,
+    },
     //statements
     ReturnStatement(),
+    EndOfFile,
 }
 
 
@@ -162,7 +163,7 @@ impl ExpressionParser {
     fn parse_unary(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
         println!("{:?} during parsing unary", self.peek());
         match self.peek() {
-            Token::Constant(_) | Token::SpecialCharacter(_) => {
+            Token::Constant(_) | Token::SpecialCharacter(_) | Token::Identifier(_) => {
                 Ok(self.parse_primary()?)
             }
             Token::Operator(Operator::Minus) | Token::Operator(Operator::Tilde) |
@@ -177,8 +178,15 @@ impl ExpressionParser {
 
     fn parse_primary(&mut self) -> Result<Rc<RefCell<ASTNode>>, String> {
         match self.peek() {
-            Token::Identifier(_) => {
-                Err("not supported".to_string())
+            Token::Identifier(name) => {
+                let name_clone = name.clone();
+                self.consume();
+                // if next token is right paretheses then identifier is function call if not varriable
+                if let Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) = self.peek() {
+                    panic!("function identifiers not supported yet!!!");
+                } else {
+                    Ok(Self::crate_variable_node(name_clone))
+                }
             }
             Token::Constant(_) => {
                 println!("constant is {}", format!("{:?}", self.peek()));
@@ -231,6 +239,15 @@ impl ExpressionParser {
             children_nodes: vec![],
         }))
     }
+
+    fn crate_variable_node(variable_name: String) -> Rc<RefCell<ASTNode>> {
+        Rc::new(RefCell::new(ASTNode {
+            node_type: ASTNodeType::VarCallNode { var_name: variable_name.clone()},
+            parent_node: None,
+            children_nodes: vec![],
+        }))
+
+    }
 }
 
 // current grammar:
@@ -268,7 +285,6 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
         parent_node: None,
         children_nodes: Vec::new(),
     }));
-    let mut semantic_analyzer = SemanticAnalyzer::new();
     let mut current_node = Rc::clone(&root);
     let mut token_iter = tokens.into_iter().peekable();
 
@@ -276,7 +292,7 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
     while let Some(token) = token_iter.next() {
         match token {
             // Match function declaration `int main()`
-            Token::Keyword(Keyword::Integer) => {
+            Token::Keyword(Keyword::Type(Type::Integer)) => {
                 if let Some(Token::Identifier(name)) = token_iter.peek() {
                     if name == "main" {
                         token_iter.next(); // Consume `main`
@@ -301,7 +317,7 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
                         }
                     } else {
                         let int_var_node = Rc::new(RefCell::new(ASTNode {
-                            node_type: ASTNodeType::VarDecl { var_name: name.to_string(), var_type: "int".to_string() },
+                            node_type: ASTNodeType::VarDecl { var_name: name.to_string(), var_type: Type::Integer },
                             parent_node: Some(Rc::downgrade(&current_node)),
                             children_nodes: vec![],
                         }));
@@ -423,6 +439,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use crate::lexer::{Constant, Keyword, Operator, SpecialCharacter, Token};
+    use crate::lexer::Type::Integer;
     use crate::parser::{generate_ast_tree, print_ast, ASTNode, ASTNodeType, ExpressionParser};
 
     #[test]
@@ -451,18 +468,20 @@ mod tests {
     #[test]
     fn test_simple_var_dec() {
         let tokens = vec![
-            Token::Keyword(Keyword::Integer),
+            Token::Keyword(Keyword::Type(Integer)),
             Token::Identifier("main".to_string()),
             Token::SpecialCharacter(SpecialCharacter::LeftParenthesis),
             Token::SpecialCharacter(SpecialCharacter::RightParenthesis),
             Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket),
-            Token::Keyword(Keyword::Integer),
+            Token::Keyword(Keyword::Type(Integer)),
             Token::Identifier("var".to_string()),
             Token::Operator(Operator::Equals),
             Token::Constant(Constant::Integer(11)),
             Token::SpecialCharacter(SpecialCharacter::SemiColon),
             Token::Keyword(Keyword::Return),
-            Token::Constant(Constant::Integer(5)),
+            Token::Identifier("var".to_string()),
+            Token::Operator(Operator::Plus),
+            Token::Constant(Constant::Integer(2)),
             Token::SpecialCharacter(SpecialCharacter::SemiColon),
             Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket),
         ];
