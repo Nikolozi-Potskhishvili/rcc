@@ -34,7 +34,7 @@ impl SemanticAnalyzer {
 
     pub fn assign_value_to_variable(&mut self, name: String, value: Constant) -> Result<(), String> {
         if self.var_table.contains_key(&name) {
-            let old_val = self.var_table.insert(name, value);
+            let old_val = self.var_table.insert(name, value.clone());
             assert!(old_val.is_some());
             assert_eq!(value.get_type(), old_val.unwrap().get_type());
 

@@ -26,9 +26,9 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> String {
 
             }
 
-            ASTNodeType::IntegerLiteral(number) => {
+            /*ASTNodeType::IntegerLiteral(number) => {
                 result += &number.to_string();
-            }
+            }*/
 
             ASTNodeType::Identifier(_) => {
             }

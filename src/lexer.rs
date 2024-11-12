@@ -1,6 +1,9 @@
 use std::ops::{Add, RangeBounds};
 use crate::lexer::FoundLongToken::{Found, NotFound};
 
+///
+/// The most upper-level representation of token
+///
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Identifier(String),
@@ -12,8 +15,6 @@ pub enum Token {
     Type,
     EndOFFile,
 }
-
-
 
 impl Token {
     pub fn get_operator(&self) -> Option<Operator> {
@@ -34,7 +35,7 @@ impl Token {
         }
     }
 }
-
+/// Primitive types. Currently, Are supported: Integer, Flout, Double, Char, Short, Long
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     Integer,
@@ -43,9 +44,10 @@ pub enum Type {
     Char,
     Short,
     Long,
-    Void,
 }
-
+///
+/// Keywords, currently supported: Type(Type), Return, Void, For, While, If, Else And SizeOf
+///
 #[derive(Debug, PartialEq, Clone)]
 pub enum Keyword {
     Type(Type),
@@ -58,6 +60,9 @@ pub enum Keyword {
     SizeOf,
 }
 
+///
+/// Operators, Currently supported: +, -, /, *(Mult), =, |, &, ~, !, <, > and ^
+///
 #[derive(Debug, PartialEq, Clone)]
 pub enum Operator {
     Plus,
@@ -75,25 +80,24 @@ pub enum Operator {
 }
 
 impl Operator {
+    ///
+    /// Returns true if operator is unary operator
+    ///
     pub fn is_unary(&self) -> bool {
         match self {
             Operator::Not | Operator::Minus | Operator::Tilde => true,
             _ => false,
         }
     }
+
+    ///
+    /// Returns true if operator is left associative
+    ///
     pub fn is_left_associative(&self) -> bool {
         match self {
             Operator::Minus | Operator::Tilde | Operator::And
             | Operator::Or | Operator::Plus => true,
             _ => false,
-        }
-    }
-    pub fn get_precedence(&self) -> i32 {
-        match self {
-            Operator::Plus => 1,
-            Operator::Division | Operator::Multiplication => 2,
-            Operator::Not | Operator::Tilde | Operator::Minus => 3,
-            _ => 0
         }
     }
 }
@@ -118,7 +122,7 @@ impl Constant {
            Constant::Double(_) => Type::Double,
            Constant::Float(_) => Type::Float,
            Constant::Char(_) => Type::Char,
-           Constant::Undefined => Type::Void
+           Constant::Undefined => Type::Char
        }
     }
 
@@ -139,7 +143,9 @@ pub struct Lexer;
 
 
 impl Lexer {
-
+    ///
+    /// Takes source code as input and returns string of supported C tokens
+    ///
     pub fn tokenize(source_code: &str) -> Vec<Token> {
         let mut result = Vec::new();
         source_code.lines()
