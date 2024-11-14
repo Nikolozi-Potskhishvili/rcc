@@ -126,6 +126,17 @@ impl Constant {
        }
     }
 
+    pub fn get_val(&self) -> String {
+        match self {
+            Constant::Integer(val) => val.to_string(),
+            Constant::Short(val) => val.to_string(),
+            Constant::Long(val) => val.to_string(),
+            Constant::Double(val) => val.to_string(),
+            Constant::Float(val) => val.to_string(),
+            Constant::Char(val) => val.to_string(),
+            Constant::Undefined => "".to_string()
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
