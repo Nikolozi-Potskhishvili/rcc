@@ -1,4 +1,3 @@
-use std::ops::{Add, RangeBounds};
 use crate::lexer::FoundLongToken::{Found, NotFound};
 
 ///
@@ -44,6 +43,7 @@ pub enum Type {
     Char,
     Short,
     Long,
+    Void,
 }
 ///
 /// Keywords, currently supported: Type(Type), Return, Void, For, While, If, Else And SizeOf
@@ -122,7 +122,7 @@ impl Constant {
            Constant::Double(_) => Type::Double,
            Constant::Float(_) => Type::Float,
            Constant::Char(_) => Type::Char,
-           Constant::Undefined => Type::Char
+           Constant::Undefined => Type::Void,
        }
     }
 
@@ -160,7 +160,7 @@ impl Lexer {
 }
 /// this function parses string which certainly contains at least one token
 fn parse_token_helper(s: &str) -> Vec<Token> {
-    let (mut tokens, mut cur_token, mut open_parentheses) = s.chars()
+    let (mut tokens, cur_token, mut open_parentheses) = s.chars()
         .fold(
             (Vec::new(), String::new(), 0),
             |(mut tokens, mut cur_token, mut open_parentheses), char| {
@@ -241,7 +241,7 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
     if token.len() != 1 {
         return Err("Special character length must be 1");
     }
-    let allowed_chars = "[]{}(),.:;*=#~";
+    let _allowed_chars = "[]{}(),.:;*=#~";
     let ch = token.chars().next().unwrap();
     match  ch {
         '[' => Ok(SpecialCharacter::LeftSquareBracket),
@@ -283,17 +283,11 @@ fn get_operator(token: &str) -> Result<Operator, String> {
 }
 
 fn is_const_integer(token: &str) -> bool {
-    if let Ok(number) = token.to_string().parse::<i32>() {
+    if let Ok(_) = token.to_string().parse::<i32>() {
         return true
     }
     false
 }
-
-fn is_const_char(token: &str) -> bool {
-
-    false
-}
-
 
 fn is_const(token: &str) -> bool {
     is_const_integer(token)
@@ -327,7 +321,7 @@ fn is_identifier(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::{is_identifier, get_keyword, Lexer, Keyword, Token};
+    use crate::lexer::{is_identifier, get_keyword, Lexer, Keyword};
 
     #[test]
     fn keywords() {

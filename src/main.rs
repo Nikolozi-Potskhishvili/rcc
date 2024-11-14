@@ -52,7 +52,6 @@ fn compile_source_code(source_code: String) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use std::{fs, panic};
-    use std::fs::File;
     use std::process::Command;
     use crate::{compile_source_code, get_source_code};
 
