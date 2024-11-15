@@ -28,12 +28,13 @@ fn get_source_code(file_name: &String) -> String {
 
 fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
-    for token in &tokens {
+/*    for token in &tokens {
         println!("{:?}", token);
     }
+*/
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
-    print_ast(&ast_tree, 0);
-    let code = generate_assembly(ast_tree);
+    //print_ast(&ast_tree, 0);
+    let code = generate_assembly(ast_tree).expect("expected no errors in codegen");
     for line in code.lines() {
         println!("{}", line);
     }
@@ -89,6 +90,14 @@ mod tests {
     }
 
     #[test]
+    fn simple_vars() {
+        let result = test_helper("./test_files/test_simple_int_var.c", 7);
+        clean_up_tests_files();
+
+        result.expect("tests panicked");
+    }
+
+    #[test]
     fn unary_operators_only_integers() {
         let inputs = vec!(
             String::from("./test_files/test_minus.c"),
@@ -116,6 +125,7 @@ mod tests {
     fn test_sum() {
         let file_name = String::from("./test_files/test_sum_of_two.c");
         let result = test_helper(&file_name, 6);
+        assert!(result.is_ok());
         clean_up_tests_files();
         result.expect("failed");
     }

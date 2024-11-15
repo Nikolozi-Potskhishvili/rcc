@@ -311,10 +311,10 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result< Rc<RefCel
             _ => return Err(format!("Unexpected token {:?}", token)),
         }
     }
-    for val in &extracted_tokens {
+/*    for val in &extracted_tokens {
         println!("{}", format!("{:?} token", val));
     }
-    let mut expression_parser = ExpressionParser::new(extracted_tokens);
+*/    let mut expression_parser = ExpressionParser::new(extracted_tokens);
     if let Ok(expression_root) = expression_parser.parse_expression() {
         return Ok(expression_root);
     };
@@ -331,22 +331,23 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
     }));
     let mut current_node = Rc::clone(&root);
     let mut token_iter = tokens.into_iter().peekable();
-
+    let mut parent_stack : Vec<Rc<RefCell<ASTNode>>> = Vec::new();
+    parent_stack.push(Rc::clone(&root));
     // Parse the tokens
     while let Some(token) = token_iter.next() {
         current_node = match token {
             // parse int keyword
             Token::Keyword(Keyword::Type(Type::Integer)) => {
-                parse_integer_declaration(&mut token_iter, &current_node)?
+                parse_integer_declaration(&mut token_iter, &mut parent_stack)?
             },
 
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
-              parse_return_statement(&mut token_iter, &current_node)?
+              parse_return_statement(&mut token_iter, &mut parent_stack)?
             },
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket)=> {
-                handle_end_of_block(&mut token_iter, &current_node)?
+                handle_end_of_block(&mut token_iter, &current_node, &mut parent_stack)?
             }
             Token::Identifier(identifier) => {
                 handle_identifier_usage(&mut token_iter, &current_node)?
@@ -362,7 +363,7 @@ fn handle_identifier_usage(
     token_iter: &mut Peekable<IntoIter<Token>>,
     current_node: & Rc<RefCell<ASTNode>>
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
-    return match token_iter.peek() {
+    match token_iter.peek() {
        Some(Token::Operator(Operator::Equals)) => {
            token_iter.next();
            let var_node = Rc::new(RefCell::new(ASTNode {
@@ -385,13 +386,13 @@ fn handle_identifier_usage(
 }
 fn parse_integer_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    current_node: & Rc<RefCell<ASTNode>>
+    parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
     if let Some(Token::Identifier(name)) = token_iter.peek() {
         return if name == "main" {
-            parse_function_declaration(token_iter, current_node)
+            parse_function_declaration(token_iter, parent_stack)
         } else {
-            parse_variable_declaration(token_iter, current_node)
+            parse_variable_declaration(token_iter, parent_stack)
         }
     }
     Err("Unexpected token while parsing integer declaration".to_string())
@@ -399,7 +400,7 @@ fn parse_integer_declaration(
 
 fn parse_function_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    current_node: &Rc<RefCell<ASTNode>>
+    parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
     token_iter.next(); // Consume `main`
     // Expect parentheses `()` and '{'
@@ -409,16 +410,17 @@ fn parse_function_declaration(
     // Parse main function
     let function_node = Rc::new(RefCell::new(ASTNode {
             node_type: ASTNodeType::FnDeclaration { fn_name: "main".to_string(), return_type: "int".to_string() },
-            parent_node: Some(Rc::downgrade(&current_node)),
+            parent_node: Some(Rc::downgrade(parent_stack.last().unwrap())),
             children_nodes: Vec::new(),
         }));
-    current_node.borrow_mut().children_nodes.push(Rc::clone(&function_node));
+    parent_stack.last().unwrap().borrow_mut().children_nodes.push(Rc::clone(&function_node));
+    parent_stack.push(Rc::clone(&function_node));
     Ok(function_node)
 }
 
 fn parse_variable_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    current_node: & Rc<RefCell<ASTNode>>
+    parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
     if let Some(Token::Identifier(name)) = token_iter.next() {
         let int_var = Rc::new(RefCell::new(ASTNode {
@@ -426,15 +428,16 @@ fn parse_variable_declaration(
                 var_name: name,
                 var_type: Type::Integer,
             },
-            parent_node: Some(Rc::downgrade(current_node)),
+            parent_node: Some(Rc::downgrade(parent_stack.last().unwrap())),
             children_nodes: vec![],
         }));
-        current_node.borrow_mut().children_nodes.push(Rc::clone(&int_var));
+       parent_stack.last().unwrap().borrow_mut().children_nodes.push(Rc::clone(&int_var));
 
         match token_iter.peek() {
             Some(Token::Operator(Operator::Equals)) => {
                 token_iter.next();
                 let expression_root = parse_expression(token_iter)?;
+                expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&int_var));
                 int_var.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
                 Ok(int_var)
             },
@@ -452,17 +455,18 @@ fn parse_variable_declaration(
 }
 
 fn parse_return_statement(
-    token_iter: &mut Peekable<std::vec::IntoIter<Token>>,
-    current_node: &Rc<RefCell<ASTNode>>,
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>,
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
     let return_node = Rc::new(RefCell::new(ASTNode {
         node_type: ASTNodeType::ReturnStatement(),
-        parent_node: Some(Rc::downgrade(current_node)),
+        parent_node: Some(Rc::downgrade(&parent_stack.last().unwrap())),
         children_nodes: vec![],
     }));
-    current_node.borrow_mut().children_nodes.push(Rc::clone(&return_node));
+    parent_stack.last().unwrap().borrow_mut().children_nodes.push(Rc::clone(&return_node));
 
     let expression_root = parse_expression(token_iter)?;
+    expression_root.borrow_mut().parent_node = Some(Rc::downgrade(&return_node));
     return_node.borrow_mut().children_nodes.push(Rc::clone(&expression_root));
 
     Ok(return_node)
@@ -472,8 +476,10 @@ fn parse_return_statement(
 fn handle_end_of_block(
     token_iter: &mut Peekable<std::vec::IntoIter<Token>>,
     current_node: &Rc<RefCell<ASTNode>>,
+    parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>,
 ) -> Result<Rc<RefCell<ASTNode>>, String> {
     let parent_node = current_node.borrow().parent_node.as_ref().and_then(|p| p.upgrade());
+    parent_stack.pop();
     parent_node.ok_or_else(|| "No parent node found when handling block end".to_string())
 }
 fn expect_token(
