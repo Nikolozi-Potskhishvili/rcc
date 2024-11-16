@@ -36,7 +36,28 @@ pub enum ASTNodeType {
     /// # Fields
     /// - `fn_name`: The name of the function being declared.
     /// - `return_type`: The return type of the function.
-    FnDeclaration{ fn_name: String, return_type: String},
+    FnDeclaration{
+        fn_name: String,
+        return_type: String,
+        block: Rc<RefCell<ASTNodeType::Block>>
+    },
+
+    If {
+        condition_root: Rc<RefCell<ASTNode>>,
+        then_ref: Rc<RefCell<ASTNode>>,
+        else_ref: Option<Rc<RefCell<ASTNode>>>,
+    },
+
+    Else {
+
+    },
+    /// Represents block of code.
+    ///
+    /// # Fields
+    ///
+    Block {
+
+    },
 
     /// Represents a variable declaration node.
     ///
@@ -323,7 +344,7 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result< Rc<RefCel
 ///
 /// Gets Vec of tokens as input and returns AST tree or error Result
 ///
-pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>, String> {
+pub fn generate_ast_tree(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>, String> {
     let root = Rc::new(RefCell::new(ASTNode {
         node_type: ASTNodeType::Root,
         parent_node: None,
@@ -340,7 +361,12 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
             Token::Keyword(Keyword::Type(Type::Integer)) => {
                 parse_integer_declaration(&mut token_iter, &mut parent_stack)?
             },
-
+            Token::Keyword(Keyword::If) => {
+                parse_if_keyword(&mut token_iter, &mut parent_stack)?
+            },
+            Token::Keyword(Keyword::Else) => {
+                parser_else_keyword(&mut token_iter, &mut parent_stack)?
+            },
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
               parse_return_statement(&mut token_iter, &mut parent_stack)?
@@ -357,6 +383,23 @@ pub fn generate_ast_tree<'a>(tokens: Vec<Token>) -> Result<Rc<RefCell<ASTNode>>,
         }
     }
     Ok(root)
+}
+
+fn parser_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>) -> Result<Rc<RefCell<ASTNode>>, String> {
+    todo!()
+}
+
+fn parse_if_keyword(token_iter: &mut Peekable<IntoIter<Token>>, parent_stack: &mut Vec<Rc<RefCell<ASTNode>>>) -> Result<Rc<RefCell<ASTNode>>, String> {
+    // consume if keyword
+    token_iter.next();
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+    let bool_expression_root = handle_boolean_expression(token_iter)?;
+
+    Ok()
+}
+
+fn handle_boolean_expression(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<ASTNode>>, String> {
+    todo!()
 }
 
 fn handle_identifier_usage(
@@ -482,6 +525,8 @@ fn handle_end_of_block(
     parent_stack.pop();
     parent_node.ok_or_else(|| "No parent node found when handling block end".to_string())
 }
+
+/// consumes next if it is expected token and returns () or returns error if not
 fn expect_token(
     token_iter: &mut Peekable<std::vec::IntoIter<Token>>,
     expected_token: Token

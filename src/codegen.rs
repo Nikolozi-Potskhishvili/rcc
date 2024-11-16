@@ -73,10 +73,10 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> Result<String, Strin
             }
             ASTNodeType::ReturnStatement() => {
                 println!("{:?}", child.clone().borrow().get_children_nodes().get(0).unwrap().borrow().get_parent_node().clone().unwrap());
-                let instructions = generate_return_instructions(child, &mut var_table)?;
+                let (instructions, reg) = generate_return_instructions(child, &mut var_table)?;
                 result += &instructions;
                 result += "\n";
-                result += &"    mov rax, r8\n".to_string();
+                result += &format!("    mov rax, r{}\n", reg);
                 result += &format!("    add rsp, {}\n", stack_size);
                 result += "    ret\n";
             }
@@ -90,7 +90,7 @@ pub fn generate_assembly(ast_root: Rc<RefCell<ASTNode>>) -> Result<String, Strin
 fn generate_return_instructions(
     node: &Rc<RefCell<ASTNode>>,
     var_table: &mut HashMap<String, Variable>,
-) -> Result<String, String> {
+) -> Result<(String, i32), String> {
     let binding = node.borrow();
     let node_type = binding.get_type();
     match node_type {
@@ -101,8 +101,9 @@ fn generate_return_instructions(
             }
             let expression_root = children.get(0).unwrap();
             let mut instruction_vec = Vec::new();
-            generate_expression_instructions(expression_root, var_table, &mut instruction_vec)?;
-            Ok(instruction_vec.join("\n"))
+            let mut free_registers = vec![8, 9, 10];
+            let reg= generate_expression_instructions(expression_root, var_table, &mut instruction_vec, &mut free_registers)?;
+            Ok((instruction_vec.join("\n"), reg))
         }
         _=> Err("dfdsafadsfdasfds".to_string())
     }
@@ -131,7 +132,7 @@ fn allocate_int_on_stack(
 fn store_int_on_stack(
     node: &Rc<RefCell<ASTNode>>,
     var_table: &mut HashMap<String, Variable>,
-    cur_stack_size: &mut i64
+    cur_stack_size: &mut i64,
 ) -> Result<String, String> {
     let binding = node.borrow();
     let var_name = match binding.get_type() {
@@ -144,12 +145,14 @@ fn store_int_on_stack(
         return Err("Assigment without declaring a variable".to_string());
     }
     let var = var_table.get(var_name).unwrap();
+
     let binding = node.borrow();
     let expression_root = binding.get_children_nodes().get(0).expect("expected expression after var");
-    let expression_root_save_reg = get_register_number(expression_root)?;
+
     let mut instruction_vec = Vec::new();
-    generate_expression_instructions(expression_root, var_table, &mut instruction_vec)?;
-    instruction_vec.push(format!("    mov [rsp + {}], r{}", var.memory_offset, expression_root_save_reg));
+    let mut free_registers = vec![8, 9, 10];
+    let reg = generate_expression_instructions(expression_root, var_table, &mut instruction_vec, &mut free_registers)?;
+    instruction_vec.push(format!("    mov [rsp + {}], r{}", var.memory_offset, reg));
     Ok(instruction_vec.join("\n"))
 }
 ///
@@ -160,69 +163,67 @@ fn store_int_on_stack(
 fn generate_expression_instructions(
     expression_root: &Rc<RefCell<ASTNode>>,
     var_table: &HashMap<String, Variable>,
-    result_vec: &mut Vec<String>
-) -> Result<(), String> {
-    let mut current_node = Rc::clone(expression_root);
-    match current_node.borrow().get_type() {
-        ASTNodeType::BinaryOperation { left, right, operator} => {
-             generate_expression_instructions(left, var_table, result_vec)?;
-             generate_expression_instructions(right, var_table, result_vec)?;
+    result_vec: &mut Vec<String>,
+    free_registers: &mut Vec<i32>,
+) -> Result<i32, String> {
+    let binding = Rc::clone(expression_root);
+    let mut current_node_type = binding.borrow();
+    return match current_node_type.get_type() {
+        ASTNodeType::BinaryOperation { left, right, operator } => {
+            let left_reg = generate_expression_instructions(left, var_table, result_vec, free_registers)?;
+            let right_reg = generate_expression_instructions(right, var_table, result_vec, free_registers)?;
 
             let instruction = match operator {
                 Operator::Plus => "add",
                 Operator::Minus => "sub",
                 Operator::Division => "div",
-                Operator::Multiplication => "mul",
+                Operator::Multiplication => "imul",
                 _ => return Err("Unsupported operator".to_string())
             };
-            result_vec.push("    mov rcx, 0".to_string());
-            result_vec.push("    add rcx, r8".to_string());
-            result_vec.push(format!("    {} rcx, r9", instruction));
-            let register_to_save = get_register_number(&current_node)?;
-            result_vec.push(format!("    mov r{}, rcx", register_to_save));
+            result_vec.push(format!("    {} r{}, r{}", instruction, left_reg, right_reg));
+            free_registers.push(right_reg);
+            Ok(left_reg)
         },
-        ASTNodeType::UnaryOperation {operator, operand} => {
-            generate_expression_instructions(operand, var_table, result_vec)?;
+        ASTNodeType::UnaryOperation { operator, operand } => {
+            let register = generate_expression_instructions(operand, var_table, result_vec, free_registers)?;
 
             let instruction = match operator {
-                Operator::Not => "",
-                Operator::Tilde => "",
+                Operator::Not => {
+                    result_vec.push(format!("test r{}, r{}", register, register));
+                    result_vec.push(format!("setz al"));
+                    result_vec.push(format!("movzx r{}, al", register));
+                    return Ok(register);
+                },
+                Operator::Tilde => "not",
                 Operator::Minus => "neg",
                 _ => return Err("Unsupported operator".to_string())
             };
-            result_vec.push("    mov rcx, 0".to_string());
-            result_vec.push("    add rcx, r8".to_string());
-            result_vec.push(format!("    {} rcx", instruction));
-            let register_to_save = get_register_number(&current_node)?;
-            result_vec.push(format!("    mov r{}, rcx", register_to_save));
-
+            result_vec.push(format!("    {} r{}", instruction, register));
+            Ok(register)
         },
-        ASTNodeType::OperandNode {value } => {
+        ASTNodeType::OperandNode { value } => {
             let constant = value.get_constant().expect("expected constant");
             let val = constant.get_val();
             if val == "" {
                 return Err("undefined constant".to_string());
             }
-            result_vec.push("    mov rcx, 0".to_string());
-            result_vec.push(format!("    add rcx, {}", val));
-            let register_to_save = get_register_number(&current_node)?;
-            result_vec.push(format!("    mov r{}, rcx", register_to_save));
-            return Ok(())
+            let reg = free_registers.pop().unwrap();
+            result_vec.push(format!("    mov r{}, 0", reg));
+            result_vec.push(format!("    add r{}, {}", reg, val));
+            Ok(reg)
         },
-        ASTNodeType::VarCallNode {var_name} => {
+        ASTNodeType::VarCallNode { var_name } => {
             let memory_offset_op = var_table.get(var_name);
             if memory_offset_op.is_none() {
                 return Err(format!("Variable {}, was not defined", var_name))
             }
             let memory_offset = memory_offset_op.unwrap().memory_offset;
-            let register_to_save = get_register_number(&current_node)?;
-
-            result_vec.push(format!("    mov r{}, [RSP + {}]", register_to_save, memory_offset));
-            return Ok(())
+            let register = free_registers.pop().unwrap();
+            result_vec.push(format!("    mov r{}, [RSP + {}]", register, memory_offset));
+            Ok(register)
         },
-        _ => return Err("Invalid node type during expression codgen".to_string())
+        _ => Err("Invalid node type during expression codgen".to_string())
     }
-    Ok(())
 }
 
 ///
