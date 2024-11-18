@@ -1,10 +1,9 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::fmt::Pointer;
+use std::cell::RefCell;
+use std::fmt::{format, Pointer};
 use std::iter::Peekable;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Stmt::{ If};
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type};
 
 
@@ -200,66 +199,47 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
     };
     Err(String::from("Unexpected expression parse error"))
 }
-///
 /// Gets Vec of tokens as input and returns AST tree or error Result
 ///
 pub fn generate_ast_tree(tokens: Vec<Token>) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
-    let mut root_statements: Vec<Rc<RefCell<Stmt>>> = Vec::new();
     let mut token_iter = tokens.into_iter().peekable();
+    let res = parse_tokens(&mut token_iter)?;
+    Ok(res)
+}
+
+fn parse_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
+    let mut root_statements: Vec<Rc<RefCell<Stmt>>> = Vec::new();
+    // stack which tracks the latest scopes block variant reference
     let mut parent_stack : Vec<Rc<RefCell<Stmt>>> = Vec::new();
+    let mut condition_stack : Vec<Rc<RefCell<Stmt>>> = Vec::new();
 
     // Parse the tokens
     while let Some(token) = token_iter.next() {
-          let stmt = match token {
+        let mut stmt = match token {
             // parse int keyword
             Token::Keyword(Keyword::Type(Type::Integer)) => {
-                parse_integer_declaration(&mut token_iter)?
+                parse_integer_declaration(token_iter)?
             },
             Token::Keyword(Keyword::If) => {
-                parse_if_keyword(&mut token_iter)?
-            },
-            Token::Keyword(Keyword::Else) => {
-                parser_else_keyword(&mut token_iter)?
+                parse_if_keyword(token_iter)?
             },
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
-              parse_return_statement(&mut token_iter)?
+                parse_return_statement(token_iter)?
             },
             // Handle block end `}`
-            Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket)=> {
-                handle_end_of_block(&mut token_iter, &mut parent_stack)?;
+            Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+                handle_end_of_block(token_iter, &mut parent_stack)?;
                 continue;
             }
             Token::Identifier(identifier) => {
-                handle_identifier_usage(&mut token_iter, &identifier)?
+                handle_identifier_usage(token_iter, &identifier)?
             }
             // Skip any other tokens or syntax we don't support
             _ => continue,
         };
-        let mut binding = stmt.borrow_mut();
-        match &mut *binding {
-            Stmt::FnDecl {body, .. } => {
-                parent_stack.push(Rc::clone(&body));
-                root_statements.push(Rc::clone(&stmt));
-                continue;
-            }
-            _ => {
-                if let Some(parent) = parent_stack.last_mut() {
-                    let mut binding = parent.borrow_mut();
-                    match &mut *binding {
-                        Stmt::Block(statements) => {
-                            statements.push(Rc::clone(&stmt));
-                            println!("{:?}", statements.len());
-                        }
-                        _ => return Err("Non block node inside of parent stack".to_string()),
-                    }
-                } else {
-                    return Err("Expected parent node in stack".to_string());
-                }
-            }
-        }
+        handle_parent_stack(&mut parent_stack, &mut root_statements, &mut stmt)?;
     }
-
     if !parent_stack.is_empty() {
         return Err("Unclosed '{' block detected".to_string());
     }
@@ -269,17 +249,67 @@ pub fn generate_ast_tree(tokens: Vec<Token>) -> Result<Vec<Rc<RefCell<Stmt>>>, S
     Ok(root_statements)
 }
 
+fn handle_parent_stack(
+    parent_stack: &mut Vec<Rc<RefCell<Stmt>>>,
+    root_statements: &mut Vec<Rc<RefCell<Stmt>>>,
+    stmt: &mut Rc<RefCell<Stmt>>
+) -> Result<(), String> {
+    let mut binding = stmt.borrow_mut();
+    match &mut *binding {
+        Stmt::FnDecl {body, .. } => {
+            parent_stack.push(Rc::clone(&body));
+            root_statements.push(Rc::clone(&stmt));
+        },
+        Stmt::If { condition, then_branch, else_branch } => {
+            parent_stack.push(Rc::clone(then_branch));
 
-fn parser_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
-    todo!()
+        },
+        _ => {
+            if let Some(parent) = parent_stack.last_mut() {
+                let mut binding = parent.borrow_mut();
+                match &mut *binding {
+                    Stmt::Block(statements) => {
+                        statements.push(Rc::clone(&stmt));
+                        println!("{:?}", statements.len());
+                    }
+                    _ => return Err("Non block node inside of parent stack".to_string()),
+                }
+            } else {
+                return Err("Expected parent node in stack".to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
+/// Parses tokens after else keyword
+///
+fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc<RefCell<Stmt>>, String> {
+    match token_iter.peek().ok_or_else(|| "No token after parsing else keyword")? {
+        Token::Keyword(Keyword::If) => {
+            // consume if keyword
+            token_iter.next();
+            let statements = parse_tokens(token_iter)
+            Ok(parse_if_keyword(token_iter)?)
+        }
+        // New block
+        /*Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+
+        }*/
+        _ => {
+            return Err(format!("Invalid token after else keyword {:?}", token_iter.peek()))
+        }
+    }
+}
+
+/// Parsers if keyword
+///
+///
 fn parse_if_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
-    // consume if keyword
-    token_iter.next();
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
     let bool_expression_root = handle_boolean_expression(token_iter)?;
-    let if_statement = Rc::new(RefCell::new(If {
+
+    let if_statement = Rc::new(RefCell::new(Stmt::If {
         condition: bool_expression_root,
         then_branch: Rc::new(RefCell::new(Stmt::Block(Vec::new()))),
         else_branch: None,
