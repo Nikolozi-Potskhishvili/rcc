@@ -11,6 +11,7 @@ mod lexer;
 mod parser;
 mod semantic_analysis;
 mod codegen;
+mod ast_types;
 
 fn main() {
     let args : Vec<String> = env::args().collect();
@@ -33,8 +34,7 @@ fn compile_source_code(source_code: String) -> ExitStatus {
     }
 */
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
-    //print_ast(&ast_tree, 0);
-    let code = generate_assembly(ast_tree).expect("expected no errors in codegen");
+    let code = generate_assembly(&ast_tree).expect("expected no errors in codegen");
     for line in code.lines() {
         println!("{}", line);
     }

@@ -2,7 +2,6 @@ use std::cell::{ RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use crate::lexer::Constant;
-use crate::parser::{ASTNode, ASTNodeType};
 
 pub struct SemanticAnalyzer {
     var_table: HashMap<String, Constant>,
@@ -42,39 +41,4 @@ impl SemanticAnalyzer {
         }
     }
 
-    pub fn semantic_analysis(&mut self,ast_root: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
-        for child in ast_root.borrow_mut().get_children_nodes() {
-            match child.borrow().get_type() {
-                ASTNodeType::FnDeclaration { .. } => {}
-                ASTNodeType::VarDecl { var_name, var_type } => {
-
-                }
-                ASTNodeType::Identifier(_) => {}
-                ASTNodeType::BinaryOperation { .. } | ASTNodeType::UnaryOperation {..}
-                | ASTNodeType::OperandNode {..} | ASTNodeType::VarCallNode {..} => {
-                    Self::delete_junk_node(Rc::clone(&ast_root), Rc::clone(&child));
-                }
-                ASTNodeType::ReturnStatement() => {
-                    let expression_root = child.borrow_mut()
-                        .get_children_nodes()
-                        .get(0)
-                        .expect("expected statement after return statement");
-                    let simplified_expression = Self::simplify_integer_expression(Rc::clone(&child));
-                }
-                ASTNodeType::EndOfFile => break,
-                _ => break,
-            }
-
-        }
-        ast_root
-    }
-
-    fn delete_junk_node(parent_node: Rc<RefCell<ASTNode>>, junk_node_root: Rc<RefCell<ASTNode>>) {
-
-    }
-
-    fn simplify_integer_expression(expression_root: Rc<RefCell<ASTNode>>) -> Rc<RefCell<ASTNode>> {
-
-        expression_root
-    }
 }
