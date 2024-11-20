@@ -98,6 +98,13 @@ mod tests {
     }
 
     #[test]
+    fn simple_conditionals() {
+        let result = test_helper("./test_files/test_conditionals.c", 2);
+        clean_up_tests_files();
+
+        result.expect("tests panicked");
+    }
+    #[test]
     fn unary_operators_only_integers() {
         let inputs = vec!(
             String::from("./test_files/test_minus.c"),

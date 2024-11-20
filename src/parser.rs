@@ -1,9 +1,11 @@
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::fmt::{format, Pointer};
 use std::iter::Peekable;
+use std::ptr::read;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
+use crate::ast_types::Stmt::{Block, If};
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type};
 
 
@@ -203,25 +205,46 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
 ///
 pub fn generate_ast_tree(tokens: Vec<Token>) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
     let mut token_iter = tokens.into_iter().peekable();
-    let res = parse_tokens(&mut token_iter)?;
-    Ok(res)
+    let mut result = Vec::new();
+    while let Some(token) = token_iter.next() {
+        match token {
+            Token::Keyword(keyword) => {
+            // expect some type keyword at global scope
+                match keyword {
+                    Keyword::Type(type_key) => {
+                        result.push(parse_integer_declaration(&mut token_iter)?);
+                    }
+                    _ => return Err(format!("Unexpected keyword {:?}, at global scope", keyword))
+                }
+            }
+            _ => return Err("Unexpected token at global scope".to_string())
+        }
+    }
+    Ok(result)
 }
 
-fn parse_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
-    let mut root_statements: Vec<Rc<RefCell<Stmt>>> = Vec::new();
+
+/// Parses scope and returns statements, that belong to it.
+///
+///
+fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
+    let mut scope_statements: Vec<Rc<RefCell<Stmt>>> = Vec::new();
     // stack which tracks the latest scopes block variant reference
     let mut parent_stack : Vec<Rc<RefCell<Stmt>>> = Vec::new();
-    let mut condition_stack : Vec<Rc<RefCell<Stmt>>> = Vec::new();
-
     // Parse the tokens
     while let Some(token) = token_iter.next() {
         let mut stmt = match token {
             // parse int keyword
             Token::Keyword(Keyword::Type(Type::Integer)) => {
-                parse_integer_declaration(token_iter)?
+                let name_tok = token_iter.next().expect("Expected name after integer keyword");
+                let name_string = match name_tok {
+                    Token::Identifier(name) => name,
+                    _ => return Err(format!("Illegal token after integer keyword: {:?}", name_tok))
+                };
+                parse_variable_declaration(token_iter, &name_string)?
             },
             Token::Keyword(Keyword::If) => {
-                parse_if_keyword(token_iter)?
+                parse_conditional(token_iter)?
             },
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
@@ -229,8 +252,7 @@ fn parse_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<Rc<Ref
             },
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
-                handle_end_of_block(token_iter, &mut parent_stack)?;
-                continue;
+                return Ok(scope_statements);
             }
             Token::Identifier(identifier) => {
                 handle_identifier_usage(token_iter, &identifier)?
@@ -238,48 +260,12 @@ fn parse_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<Rc<Ref
             // Skip any other tokens or syntax we don't support
             _ => continue,
         };
-        handle_parent_stack(&mut parent_stack, &mut root_statements, &mut stmt)?;
+        scope_statements.push(stmt);
     }
-    if !parent_stack.is_empty() {
-        return Err("Unclosed '{' block detected".to_string());
-    }
-    for statement in &root_statements {
+    for statement in &scope_statements {
         println!("{:?}", statement);
     }
-    Ok(root_statements)
-}
-
-fn handle_parent_stack(
-    parent_stack: &mut Vec<Rc<RefCell<Stmt>>>,
-    root_statements: &mut Vec<Rc<RefCell<Stmt>>>,
-    stmt: &mut Rc<RefCell<Stmt>>
-) -> Result<(), String> {
-    let mut binding = stmt.borrow_mut();
-    match &mut *binding {
-        Stmt::FnDecl {body, .. } => {
-            parent_stack.push(Rc::clone(&body));
-            root_statements.push(Rc::clone(&stmt));
-        },
-        Stmt::If { condition, then_branch, else_branch } => {
-            parent_stack.push(Rc::clone(then_branch));
-
-        },
-        _ => {
-            if let Some(parent) = parent_stack.last_mut() {
-                let mut binding = parent.borrow_mut();
-                match &mut *binding {
-                    Stmt::Block(statements) => {
-                        statements.push(Rc::clone(&stmt));
-                        println!("{:?}", statements.len());
-                    }
-                    _ => return Err("Non block node inside of parent stack".to_string()),
-                }
-            } else {
-                return Err("Expected parent node in stack".to_string());
-            }
-        }
-    }
-    Ok(())
+    Ok(scope_statements)
 }
 
 /// Parses tokens after else keyword
@@ -289,15 +275,22 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
         Token::Keyword(Keyword::If) => {
             // consume if keyword
             token_iter.next();
-            let statements = parse_tokens(token_iter)
-            Ok(parse_if_keyword(token_iter)?)
+            let if_else_node = parse_conditional(token_iter)?;
+            Ok(if_else_node)
         }
-        // New block
-        /*Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+        Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+            token_iter.next();
+            let statements = parse_scope_tokens(token_iter)?;
 
-        }*/
+            let condition_node = Rc::new(RefCell::new(If {
+                condition: (Expr::Const(Constant::Integer(1))),
+                then_branch: Rc::new(RefCell::new(Block(statements))),
+                else_branch: None,
+            }));
+            Ok(condition_node)
+        }
         _ => {
-            return Err(format!("Invalid token after else keyword {:?}", token_iter.peek()))
+            Err(format!("Invalid token after else keyword {:?}", token_iter.peek()))
         }
     }
 }
@@ -305,14 +298,26 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
 /// Parsers if keyword
 ///
 ///
-fn parse_if_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
+fn parse_conditional(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
     let bool_expression_root = handle_boolean_expression(token_iter)?;
+    let statements = parse_scope_tokens(token_iter)?;
+    let else_branch = match token_iter.peek() {
+        None => None,
+        Some(token) => {
+            match token {
+                Token::Keyword(Keyword::Else) => {
+                    Some(parse_else_keyword(token_iter)?)
+                },
+                _ => None,
+            }
+        }
+    };
 
     let if_statement = Rc::new(RefCell::new(Stmt::If {
         condition: bool_expression_root,
-        then_branch: Rc::new(RefCell::new(Stmt::Block(Vec::new()))),
-        else_branch: None,
+        then_branch: Rc::new(RefCell::new(Stmt::Block(statements))),
+        else_branch,
     }));
 
     Ok(if_statement)
@@ -345,6 +350,10 @@ fn handle_identifier_usage(
     }
 
 }
+
+/// Parses integer keyword at global scope, returns VarDec Node or FuncDec Node,
+/// All the scopes inside are parsed recursively
+///
 fn parse_integer_declaration(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
     if let Some(Token::Identifier(name)) = token_iter.peek().cloned() {
         token_iter.next(); // consume name
@@ -374,19 +383,14 @@ fn parse_function_declaration(
     let args = parse_args(token_iter);
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightParenthesis))?;
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
-    // Parse main function
+
+    let function_statements = parse_scope_tokens(token_iter)?;
     let function_node = Rc::new(RefCell::new(Stmt::FnDecl {
         name: name.to_string(),
         return_type: "int".to_string(),
         args,
-        body: Rc::new(RefCell::new(Stmt::Block(Vec::new()))),
+        body: Rc::new(RefCell::new(Stmt::Block(function_statements))),
     }));
-    match &*function_node.borrow() {
-        Stmt::FnDecl { name, return_type, args, body } => {
-            println!("{}, {}, {:?}, {:?}", name, return_type, args, body);
-        }
-        _ => {}
-    }
     Ok(function_node)
 }
 
