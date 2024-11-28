@@ -56,6 +56,63 @@ impl ExpressionParser {
         self.parse_additive()
     }
 
+    fn parse_logical_or(&mut self) -> Result<Expr, String> {
+        println!("{:?} before parsing parsing logical and in logical or", self.peek());
+        let mut node = self.parse_logical_and().unwrap_or_else(|_| Expr::Const(Constant::Integer(0)));
+        println!("{:?} after parsing parsing logical and in logical or", self.peek());
+        loop {
+            match self.peek() {
+                Token::Operator(Operator::Or) => {
+                    println!("Logical or parsed");
+                    let operator = self.consume();
+                    let right_side = self.parse_logical_or()?;
+                    let log_or_node = Self::create_binary_ast_node(operator, node, right_side);
+                    node = log_or_node;
+                },
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_logical_and(&mut self) -> Result<Expr, String> {
+        println!("{:?} before parsing parsing logical relation in logical and", self.peek());
+        let mut node = self.parse_logical_relation_op().unwrap_or_else(|_| Expr::Const(Constant::Integer(0)));
+        println!("{:?} after parsing parsing logical relation in logical and", self.peek());
+        loop {
+            match self.peek() {
+                Token::Operator(Operator::And) => {
+                    println!("Logical and parsed");
+                    let operator = self.consume();
+                    let right_side = self.parse_logical_and()?;
+                    let log_or_node = Self::create_binary_ast_node(operator, node, right_side);
+                    node = log_or_node;
+                },
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_logical_relation_op(&mut self) -> Result<Expr, String> {
+        println!("{:?} before parsing parsing additive in logical relation", self.peek());
+        let mut node = self.parse_additive().unwrap_or_else(|_| Expr::Const(Constant::Integer(0)));
+        println!("{:?} after parsing parsing additive in logical relation", self.peek());
+        loop {
+            match self.peek() {
+                Token::Operator(Operator::More) | Token::Operator(Operator::Less) => {
+                    println!("Logical and logical relation operator parsed");
+                    let operator = self.consume();
+                    let right_side = self.parse_logical_and()?;
+                    let log_or_node = Self::create_binary_ast_node(operator, node, right_side);
+                    node = log_or_node;
+                },
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
     fn parse_additive(&mut self) -> Result<Expr, String> {
         println!("{:?} before parsing parsing multi in additive", self.peek());
         let mut node = self.parse_multiplicative().unwrap_or_else(|_| Expr::Const(Constant::Integer(0)));
@@ -178,7 +235,10 @@ impl ExpressionParser {
 }
 
 // current grammar:
-//Expression    ::= Additive
+//Expression    ::= LogicalOr
+//LogicalOr        ::= LogicalAnd ( '|' LogicalAnd )*
+//LogicalAnd       ::= Relational ( '&' Relational )*
+//Relational       ::= Additive ( ('<' | '>' | '<=' | '>=') Additive )*
 //Additive      ::= Multiplicative ( '+' Multiplicative )*
 //Multiplicative ::= Unary ( ('*' | '/') Unary )*
 // Unary         ::= ('~' | '!' | '-') Unary | Primary
@@ -191,8 +251,8 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
             Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
             | Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) | Token::SpecialCharacter(SpecialCharacter::RightParenthesis)
             => { extracted_tokens.push(token); },
-            Token::SpecialCharacter(SpecialCharacter::SemiColon) => break,
-            _ => return Err(format!("Unexpected token {:?}", token)),
+            Token::SpecialCharacter(SpecialCharacter::SemiColon) | Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket) => break,
+            _ => return Err(format!("Unexpected token {:?}, during expression paring", token)),
         }
     }
     let mut expression_parser = ExpressionParser::new(extracted_tokens);
@@ -278,7 +338,7 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
             let if_else_node = parse_conditional(token_iter)?;
             Ok(if_else_node)
         }
-        Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+        Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket) => {
             token_iter.next();
             let statements = parse_scope_tokens(token_iter)?;
 
@@ -300,13 +360,14 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
 ///
 fn parse_conditional(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
-    let bool_expression_root = handle_boolean_expression(token_iter)?;
+    let bool_expression_root = parse_expression(token_iter)?;
     let statements = parse_scope_tokens(token_iter)?;
     let else_branch = match token_iter.peek() {
         None => None,
         Some(token) => {
             match token {
                 Token::Keyword(Keyword::Else) => {
+                    token_iter.next();
                     Some(parse_else_keyword(token_iter)?)
                 },
                 _ => None,
@@ -323,9 +384,6 @@ fn parse_conditional(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<Re
     Ok(if_statement)
 }
 
-fn handle_boolean_expression(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Expr, String> {
-    todo!()
-}
 
 fn handle_identifier_usage(
     token_iter: &mut Peekable<IntoIter<Token>>,

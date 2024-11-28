@@ -77,6 +77,7 @@ pub enum Operator {
     Modulo,
     Tilde,
     Less,
+    More,
 }
 
 impl Operator {
@@ -180,8 +181,8 @@ fn parse_token_helper(s: &str) -> Vec<Token> {
                     cur_token.clear();
                     match operator {
                         Operator::Minus => {
-                            tokens.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
                             tokens.push(Token::Operator(Operator::Plus));
+                            tokens.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
                             open_parentheses += 1;
                         },
                         _ => {},
@@ -289,6 +290,7 @@ fn get_operator(token: &str) -> Result<Operator, String> {
         "~" => Ok(Operator::Tilde),
         "=" => Ok(Operator::Equals),
         "<" => Ok(Operator::Less),
+        ">" => Ok(Operator::More),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }

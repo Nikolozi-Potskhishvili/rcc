@@ -29,10 +29,7 @@ fn get_source_code(file_name: &String) -> String {
 
 fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
-/*    for token in &tokens {
-        println!("{:?}", token);
-    }
-*/
+
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
     let code = generate_assembly(&ast_tree).expect("expected no errors in codegen");
     for line in code.lines() {

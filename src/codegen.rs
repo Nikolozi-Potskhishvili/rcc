@@ -1,5 +1,6 @@
-use std::cell::{RefCell};
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::lexer::{Constant, Operator, Token, Type};
@@ -9,7 +10,6 @@ struct Variable {
     memory_offset: i64,
     register: Option<String>,
 }
-
 
 pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<String, String> {
     let mut result = String::new();
@@ -46,7 +46,29 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>) -> Result<String, String> 
     let mut var_table = HashMap::new();
 
     for stm in statements {
-        match &mut *stm.borrow_mut() {
+        match &*stm.borrow_mut() {
+            Stmt::If { condition, then_branch, else_branch } => {
+                let mut free_registers = vec![8, 9, 10];
+                let mut result_vec = Vec::new();
+                let condition_instructions = generate_expression_instructions(condition, &mut var_table,&mut result_vec, &mut free_registers)?;
+                result += &*result_vec.join("\n");
+                let then_block = match *then_branch.borrow() {
+                    Stmt::Block(ref vec) => {
+                        vec.clone()
+                    }
+                    _ => return Err(format!("Unexpected token {:?}, during generating code for if block", then_branch))
+                };
+                let then_instructions = gen_block_rec(&then_block)?;
+
+                if let Some(else_branch_deref) = else_branch.as_ref() {
+                    let else_branch = match *else_branch_deref.borrow() {
+                        Stmt::If { .. } => {}
+                        Stmt::Block(_) => {}
+                        _ => return Err(format!("Unexpected statement in place of else branch: {:?}", else_branch))
+                    };
+                }
+            }
+
             Stmt::VarDecl { name, var_type, expr } => {
                 let instructions = allocate_int_on_stack(name, var_type, &mut var_table, &mut stack_size)?;
                 result += &instructions;
@@ -194,43 +216,3 @@ fn generate_expression_instructions(
     }
 }
 
-
-/*fn simplify_expression(expression_root: Expr) -> Result<i32, String> {
-    match &expression_root.borrow().get_type() {
-        ASTNodeType::BinaryOperation { operator, right, left } => {
-            let eval_left = simplify_expression(left);
-            let eval_right = simplify_expression(right);
-            match operator {
-                    Operator::Plus => Ok(eval_left? + eval_right?),
-                    Operator::Division => Ok(eval_left? / eval_right?),
-                    Operator::Multiplication => Ok(eval_left? * eval_right?),
-                    _ => Err(format!("{:?} invalid binary operator", operator)),
-            }
-        }
-        ASTNodeType::UnaryOperation { operator, operand } => {
-            let eval_operand = simplify_expression(operand).expect("Error evaluating unary node");
-            match operator {
-                Operator::Minus => Ok(-eval_operand),
-                Operator::Not => {
-                    if eval_operand == 0 {
-                        Ok(1)
-                    } else {
-                        Ok(0)
-                    }
-                },
-                Operator::Tilde => Ok(!eval_operand),
-                _ => Err(format!("{:?} invalid unary operator", operator))
-            }
-        }
-        ASTNodeType::OperandNode {value} => {
-             match value {
-                Token::Constant(Constant::Integer(int)) => {
-                    Ok(*int)
-                }
-                _ => Err(format!("{:?} is not an integer", value))
-            }
-        }
-        other => Err(format!("{:?} unexpected ast node type", other))
-    }
-}
-*/
