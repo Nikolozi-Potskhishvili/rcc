@@ -179,14 +179,6 @@ fn parse_token_helper(s: &str) -> Vec<Token> {
                 if let Ok(operator) = get_operator(&char.to_string()) {
                     tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
                     cur_token.clear();
-                    match operator {
-                        Operator::Minus => {
-                            tokens.push(Token::Operator(Operator::Plus));
-                            tokens.push(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis));
-                            open_parentheses += 1;
-                        },
-                        _ => {},
-                    }
                     tokens.push(Token::Operator(operator));
                 } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
                    tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();

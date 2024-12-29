@@ -53,7 +53,7 @@ impl ExpressionParser {
     }
 
     fn parse_expression(&mut self) -> Result<Expr, String> {
-        self.parse_additive()
+        self.parse_logical_or()
     }
 
     fn parse_logical_or(&mut self) -> Result<Expr, String> {
@@ -169,7 +169,9 @@ impl ExpressionParser {
             Token::Operator(Operator::Minus) | Token::Operator(Operator::Tilde) |
             Token::Operator(Operator::Not)=> {
                 let operator = self.consume();
+                println!("During paring unary we got: {:?}", operator);
                 let operand = self.parse_unary()?;
+
                 Ok(Self::create_unary_ast_node(operator, operand))
             },
             _ => Err(String::from("illegal token"))
@@ -255,6 +257,7 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
             _ => return Err(format!("Unexpected token {:?}, during expression paring", token)),
         }
     }
+    println!("Extracted tokens: {:?}", extracted_tokens);
     let mut expression_parser = ExpressionParser::new(extracted_tokens);
     if let Ok(expression_root) = expression_parser.parse_expression() {
         return Ok(expression_root);
@@ -519,7 +522,7 @@ fn expect_token(
     }
 }
 
-pub fn print_ast(root_nodes: &Vec<Stmt>) {
+pub fn print_ast(root_nodes: &Vec<Rc<RefCell<Stmt>>>) {
     for node in root_nodes {
         println!("{:?}", node);
     }

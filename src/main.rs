@@ -31,6 +31,7 @@ fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
 
     let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
+    print_ast(&ast_tree);
     let code = generate_assembly(&ast_tree).expect("expected no errors in codegen");
     for line in code.lines() {
         println!("{}", line);
@@ -96,7 +97,7 @@ mod tests {
 
     #[test]
     fn simple_conditionals() {
-        let result = test_helper("./test_files/test_conditionals.c", 2);
+        let result = test_helper("./test_files/test_conditionals.c", 3);
         clean_up_tests_files();
 
         result.expect("tests panicked");
