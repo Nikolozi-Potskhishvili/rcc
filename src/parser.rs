@@ -119,8 +119,8 @@ impl ExpressionParser {
         println!("{:?} after parsing parsing multi additive", self.peek());
         loop {
             match self.peek() {
-                Token::Operator(Operator::Plus) => {
-                    println!("plus parsed");
+                Token::Operator(Operator::Plus) | Token::Operator(Operator::Minus) => {
+                    println!("plus parsed or minus");
                     let operator = self.consume();
                     let right = self.parse_additive()?;
                     let plus_node = Self::create_binary_ast_node(operator, node, right);
@@ -166,8 +166,8 @@ impl ExpressionParser {
             Token::Constant(_) | Token::SpecialCharacter(_) | Token::Identifier(_) => {
                 Ok(self.parse_primary()?)
             }
-            Token::Operator(Operator::Minus) | Token::Operator(Operator::Tilde) |
-            Token::Operator(Operator::Not)=> {
+            Token::Operator(Operator::Tilde) | Token::Operator(Operator::Not)
+            | Token::Operator(Operator::Minus) => {
                 let operator = self.consume();
                 println!("During paring unary we got: {:?}", operator);
                 let operand = self.parse_unary()?;
@@ -179,6 +179,7 @@ impl ExpressionParser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
+        println!("Parsing primary:{:?}", self.peek());
         match self.peek() {
             Token::Identifier(name) => {
                 let name_clone = name.clone();
@@ -241,9 +242,9 @@ impl ExpressionParser {
 //LogicalOr        ::= LogicalAnd ( '|' LogicalAnd )*
 //LogicalAnd       ::= Relational ( '&' Relational )*
 //Relational       ::= Additive ( ('<' | '>' | '<=' | '>=') Additive )*
-//Additive      ::= Multiplicative ( '+' Multiplicative )*
+//Additive      ::= Multiplicative ( '+' | '-' Multiplicative )*
 //Multiplicative ::= Unary ( ('*' | '/') Unary )*
-// Unary         ::= ('~' | '!' | '-') Unary | Primary
+// Unary         ::= ('~' | '!') Unary | Primary
 // Primary       ::= NUMBER | Var
 
 fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, String> {
@@ -345,11 +346,7 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
             token_iter.next();
             let statements = parse_scope_tokens(token_iter)?;
 
-            let condition_node = Rc::new(RefCell::new(If {
-                condition: (Expr::Const(Constant::Integer(1))),
-                then_branch: Rc::new(RefCell::new(Block(statements))),
-                else_branch: None,
-            }));
+            let condition_node = Rc::new(RefCell::new(Block(statements)));
             Ok(condition_node)
         }
         _ => {
@@ -370,6 +367,7 @@ fn parse_conditional(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<Re
         Some(token) => {
             match token {
                 Token::Keyword(Keyword::Else) => {
+                    println!("We are parsing else keyword!!!!!");
                     token_iter.next();
                     Some(parse_else_keyword(token_iter)?)
                 },

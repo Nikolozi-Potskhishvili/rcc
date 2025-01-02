@@ -17,6 +17,8 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
     let mut result = String::new();
     let mut global_vars = HashMap::new();
     let mut functions = String::new();
+    //Keys are labels and value is number which is written after
+    let mut labels : HashMap<String, i32> = HashMap::new();
 
     for child in ast_root_nodes {
         match & *child.borrow() {
@@ -30,7 +32,7 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
                 }
                 functions += &format!("{}:\n", assembly_fn_name);
                 if let Stmt::Block(ref statements) = *body.borrow() {
-                    functions += &gen_block_rec(statements, &mut global_vars)?;
+                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels)?;
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
@@ -45,32 +47,15 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
 /// Generates Assembly instructions for given vector of Ast statements and vars declared in upper scope.
 ///
 /// Returns Result of String of x86_64 instructions tabulated by 4 spaces and separated by \n, or String error.
-fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut HashMap<String, Variable>) -> Result<String, String> {
+fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut HashMap<String, Variable>, labels: &mut HashMap<String, i32>) -> Result<String, String> {
     let mut result = String::new();
     let mut stack_size = 0;
     let mut local_vars : Vec<String> = Vec::new();
     for stm in statements {
         match &*stm.borrow_mut() {
             Stmt::If { condition, then_branch, else_branch } => {
-                let mut free_registers = vec![8, 9, 10];
-                let mut result_vec = Vec::new();
-                let condition_instructions = generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, &mut free_registers)?;
-                result += &*result_vec.join("\n");
-                let then_block = match *then_branch.borrow() {
-                    Stmt::Block(ref vec) => {
-                        vec.clone()
-                    }
-                    _ => return Err(format!("Unexpected token {:?}, during generating code for if block", then_branch))
-                };
-                let then_instructions = gen_block_rec(&then_block, upper_scope_vars)?;
-
-                if let Some(else_branch_deref) = else_branch.as_ref() {
-                    let else_branch = match *else_branch_deref.borrow() {
-                        Stmt::If { .. } => {}
-                        Stmt::Block(_) => {}
-                        _ => return Err(format!("Unexpected statement in place of else branch: {:?}", else_branch))
-                    };
-                }
+                let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels)?;
+                result += conditional_instructions.as_str();
             },
             Stmt::VarDecl { name, var_type, expr } => {
                 let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, &mut stack_size)?;
@@ -112,6 +97,58 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
         }
         upper_scope_vars.remove(&var);
     }
+    Ok(result)
+}
+
+fn generate_if_else_instructions(
+    condition: &Expr,
+    then_branch: &Rc<RefCell<Stmt>>,
+    else_branch: &Option<Rc<RefCell<Stmt>>>,
+    upper_scope_vars: &mut HashMap<String, Variable>,
+    labels: &mut HashMap<String, i32>,
+) -> Result<String, String> {
+    let mut result = String::new();
+    let mut free_registers = vec![8, 9, 10];
+    let mut result_vec = Vec::new();
+    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, &mut free_registers)?;
+    result += &*result_vec.join("\n");
+    result += "\n";
+
+    let if_label_number = labels.get("if_label").copied().unwrap_or(0);
+    labels.insert("if_label".to_string(), if_label_number + 1);
+    let else_label_number = labels.get("else_label").copied().unwrap_or(0);
+    labels.insert("else_label".to_string(), else_label_number + 1);
+    let end_label_number = labels.get("end_label").copied().unwrap_or(0);
+    labels.insert("end_label".to_string(), end_label_number + 1);
+    result += format!("    cmp al, 1\n    je if_label{}\n", if_label_number).as_str();
+    if else_branch.is_some() {
+        result += format!("    jmp else_label{}\n", else_label_number).as_str();
+    }
+
+    let then_block = match *then_branch.borrow() {
+        Stmt::Block(ref vec) => {
+            vec.clone()
+        }
+        _ => return Err(format!("Unexpected token {:?}, during generating code for if block", then_branch))
+    };
+    result += format!("if_label{}:\n", if_label_number).as_str();
+    let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels)?;
+    result += &*then_instructions;
+    result += format!("\n    jmp end_label{}\n", end_label_number).as_str();;
+
+    if let Some(else_branch_deref) = else_branch.as_ref() {
+        result += format!("else_label{}:\n", else_label_number).as_str();
+        match &*else_branch_deref.borrow_mut() {
+            Stmt::If { condition, then_branch, else_branch } => {
+                result += &*generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels)?;
+            }
+            Stmt::Block(statements) => {
+                result += &*gen_block_rec(statements, upper_scope_vars, labels)?;
+            }
+            _ => return Err(format!("Unexpected statement in place of else branch: {:?}", else_branch))
+        };
+    }
+    result += format!("\nend_label{}:\n", end_label_number).as_str();
     Ok(result)
 }
 
@@ -182,7 +219,7 @@ fn generate_expression_instructions(
                     Operator::And => "",
                     Operator::Or => "",
                     Operator::Less => "    setl al",
-                    Operator::More => "    setg al\n",
+                    Operator::More => "    setg al",
                     _ => return Err(format!("Unexpected operator: {:?}, during codgen of logical op", operator))
                 };
                 result_vec.push(comp_res.to_string());

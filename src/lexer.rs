@@ -86,7 +86,7 @@ impl Operator {
     ///
     pub fn is_unary(&self) -> bool {
         match self {
-            Operator::Not | Operator::Minus | Operator::Tilde => true,
+            Operator::Not | Operator::Tilde => true,
             _ => false,
         }
     }
