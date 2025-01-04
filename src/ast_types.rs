@@ -18,7 +18,7 @@ pub enum Stmt {
         then_branch: Rc<RefCell<Stmt>>,
         else_branch: Option<Rc<RefCell<Stmt>>>
     },
-    While { condition: Expr, body: Box<Stmt>},
+    While { condition: Expr, body: Rc<RefCell<Stmt>>},
     Block(Vec<Rc<RefCell<Stmt>>>),
     Return(Option<Expr>)
 }

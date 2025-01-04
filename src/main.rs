@@ -136,6 +136,25 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_and_unary_ops() {
+        let file_name = String::from("./test_files/test_unary_and_binary_ops.c");
+        let result = test_helper(&file_name, 156);
+        assert!(result.is_ok());
+        clean_up_tests_files();
+        result.expect("failed");
+    }
+
+    #[test]
+    fn test_simple_while() {
+        let file_name = String::from("./test_files/test_simple_while.c");
+        let result = test_helper(&file_name, 16);
+        assert!(result.is_ok());
+        clean_up_tests_files();
+        result.expect("failed");
+    }
+
+
+    #[test]
     fn test_mixed_ar_expressions() {
         let file_name = String::from("./test_files/test_mult_of_sums.c");
         let expected_val = 45;

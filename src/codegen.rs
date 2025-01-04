@@ -57,6 +57,10 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
                 let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels)?;
                 result += conditional_instructions.as_str();
             },
+            Stmt::While {condition, body} => {
+                let while_loop_instructions = generate_while_instructions(condition, body, upper_scope_vars, labels)?;
+                result += &*while_loop_instructions;
+            },
             Stmt::VarDecl { name, var_type, expr } => {
                 let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, &mut stack_size)?;
                 local_vars.push(name.clone());
@@ -97,6 +101,40 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
         }
         upper_scope_vars.remove(&var);
     }
+    Ok(result)
+}
+
+fn generate_while_instructions(
+    condition: &Expr,
+    body: &Rc<RefCell<Stmt>>,
+    upper_scope_vars: &mut HashMap<String, Variable>,
+    labels: &mut HashMap<String, i32>) -> Result<String, String> {
+    let mut result = String::new();
+    let mut result_vec = Vec::new();
+    let mut registers = vec![8, 9, 10];
+
+    let last_while = labels.get("while_label").copied().unwrap_or(0);
+    labels.insert("while_label".to_string(), last_while + 1);
+    let last_end = labels.get("end_label").copied().unwrap_or(0);
+    labels.insert("end_label".to_string(), last_end + 1);
+
+    result += &*format!("while_label{}:\n", last_while);
+    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, &mut registers)?;
+    result += &*result_vec.join("\n");
+    result += "\n";
+    result += "    test al, al\n";
+    result += &*format!("    jz end_label{}\n", last_end);
+
+    let body_binding = body.borrow_mut();
+    let body_vec = match body_binding.deref() {
+        Stmt::Block(vec) => vec,
+        _ => return Err("Unexpected AST node during parsing while body".to_string())
+    };
+    let body_instructions = gen_block_rec(body_vec, upper_scope_vars, labels)?;
+    result += &*body_instructions;
+    result += "\n";
+    result += &*format!("    jmp while_label{}\n", last_while);
+    result += &*format!("end_label{}:\n", last_end);
     Ok(result)
 }
 

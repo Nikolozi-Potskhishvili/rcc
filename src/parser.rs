@@ -1,12 +1,12 @@
 use std::cell::{Ref, RefCell};
 use std::fmt::{format, Pointer};
 use std::iter::Peekable;
-use std::ptr::read;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::ast_types::Stmt::{Block, If};
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type};
+use crate::lexer::SpecialCharacter::LeftCurlyBracket;
 
 
 struct ExpressionParser {
@@ -249,11 +249,23 @@ impl ExpressionParser {
 
 fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, String> {
     let mut extracted_tokens: Vec<Token> = Vec::new();
+    let mut open_paren_count = 0;
     for token in tokens {
         match token {
-            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
-            | Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) | Token::SpecialCharacter(SpecialCharacter::RightParenthesis)
-            => { extracted_tokens.push(token); },
+            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)=> {
+                extracted_tokens.push(token);
+            },
+            Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
+                open_paren_count += 1;
+                extracted_tokens.push(token);
+            },
+            Token::SpecialCharacter(SpecialCharacter::RightParenthesis) => {
+                open_paren_count -= 1;
+                if open_paren_count < 0 {
+                    break;
+                }
+                extracted_tokens.push(token);
+            }
             Token::SpecialCharacter(SpecialCharacter::SemiColon) | Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket) => break,
             _ => return Err(format!("Unexpected token {:?}, during expression paring", token)),
         }
@@ -317,10 +329,13 @@ fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
                 return Ok(scope_statements);
-            }
+            },
             Token::Identifier(identifier) => {
                 handle_identifier_usage(token_iter, &identifier)?
-            }
+            },
+            Token::Keyword(Keyword::While) => {
+                handle_while_keyword(token_iter)?
+            },
             // Skip any other tokens or syntax we don't support
             _ => continue,
         };
@@ -330,6 +345,21 @@ fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<
         println!("{:?}", statement);
     }
     Ok(scope_statements)
+}
+
+fn handle_while_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
+    //consume while keyword
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+    let expression_root = parse_expression(token_iter)?;
+    expect_token(token_iter, Token::SpecialCharacter(LeftCurlyBracket))?;
+    let cycle_body = parse_scope_tokens(token_iter)?;
+    let body_block = Rc::new(RefCell::new(Block(cycle_body)));
+    let while_node = Rc::new(RefCell::new( Stmt::While {
+        condition: expression_root,
+        body: body_block
+    }));
+
+    Ok(while_node)
 }
 
 /// Parses tokens after else keyword
