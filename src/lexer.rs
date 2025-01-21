@@ -11,7 +11,7 @@ pub enum Token {
     Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
-    Type(Type),
+    Type(String),
     EndOFFile,
 }
 
@@ -69,7 +69,9 @@ pub enum Operator {
     Minus,
     Division,
     Multiplication,
-    Equals,
+    Assign,
+    IncrementAssign,
+    DecrementAssign,
     And,
     Or,
     Not,
@@ -280,7 +282,7 @@ fn get_operator(token: &str) -> Result<Operator, String> {
         "!" => Ok(Operator::Not),
         "-" => Ok(Operator::Minus),
         "~" => Ok(Operator::Tilde),
-        "=" => Ok(Operator::Equals),
+        "=" => Ok(Operator::Assign),
         "<" => Ok(Operator::Less),
         ">" => Ok(Operator::More),
         _ => Err(String::from("unexpected error during parsing operator")),

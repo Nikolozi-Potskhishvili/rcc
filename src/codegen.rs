@@ -253,7 +253,7 @@ fn generate_expression_instructions(
             if is_logical_operator(&operator) {
                 result_vec.push(format!("    cmp r{}, r{}", left_reg, right_reg));
                 let comp_res : &str = match operator {
-                    Operator::Equals => "",
+                    Operator::Assign => "",
                     Operator::And => "",
                     Operator::Or => "",
                     Operator::Less => "    setl al",
@@ -308,7 +308,7 @@ fn generate_expression_instructions(
 
 fn get_instruction_by_operator(operator: &Operator) -> Result<&str, String> {
     return match operator {
-        Operator::Equals => Ok(""),
+        Operator::Assign => Ok(""),
         Operator::More => Ok(""),
         Operator::Less => Ok(""),
         Operator::Plus => Ok("add"),
@@ -321,7 +321,7 @@ fn get_instruction_by_operator(operator: &Operator) -> Result<&str, String> {
 
 fn is_logical_operator(operator: &Operator) -> bool {
    return match operator {
-       Operator::Equals | Operator::Or | Operator::And | Operator::Less | Operator::More => true,
+       Operator::Assign | Operator::Or | Operator::And | Operator::Less | Operator::More => true,
         _ => false
    }
 }
@@ -339,7 +339,7 @@ fn generate_logical_instruction(
         Expr::BinaryExpr(expr) => {
             let (left, right, operator) = (&expr.right, &expr.left, &expr.operator);
             match operator {
-                Operator::Equals => {}
+                Operator::Assign => {}
                 Operator::And => {}
                 Operator::Or => {
 

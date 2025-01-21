@@ -3,6 +3,7 @@ use std::fmt::{format, Pointer};
 use std::iter::Peekable;
 use std::ptr::read;
 use std::rc::Rc;
+use std::thread::sleep;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::ast_types::Stmt::{Block, For, If};
@@ -55,7 +56,24 @@ impl ExpressionParser {
     }
 
     fn parse_expression(&mut self) -> Result<Expr, String> {
-        self.parse_logical_or()
+        self.parse_assignment()
+    }
+
+    fn parse_assignment(&mut self) -> Result<Expr, String> {
+        println!("{:?} before parsing parsing an assignment", self.peek());
+        let mut lhs = self.parse_l_value().unwrap_or(self.parse_logical_or()?);
+        loop {
+            match self.peek() {
+                Token::Operator(Operator::Assign) | Token::Operator(Operator::IncrementAssign)
+                | Token::Operator(Operator::DecrementAssign) => {
+                    let operator = self.consume();
+                    let rhs = self.parse_assignment()?;
+                    return Ok(Self::create_binary_ast_node(operator, lhs, rhs));
+                },
+                _ => break,
+            }
+        }
+        Ok(lhs)
     }
 
     fn parse_logical_or(&mut self) -> Result<Expr, String> {
@@ -209,7 +227,22 @@ impl ExpressionParser {
             _ => Err(format!("unexpected token {:?}", self.peek())),
         }
     }
-
+    fn parse_l_value(&mut self) -> Result<Expr, String> {
+        println!("Parsing l value:{:?}", self.peek());
+        let peeked_token = self.peek().clone();
+        match peeked_token {
+            Token::Identifier(name) => {
+                self.consume();
+                match self.peek() {
+                    Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
+                        return Err("function identifiers are not l value".to_string());
+                    }
+                    _ => Ok(Self::create_constant_ast_node(Token::Identifier(name.clone()))),
+                }
+            }
+            _ => Err(format!("token {:?} is not a correct l value", self.peek()))
+        }
+    }
     fn create_unary_ast_node(token: Token, operand: Expr) -> Expr {
         let unary_operator = token.get_operator().expect("not found unary operator during constructing node");
         Expr::UnaryExpr(UnaryExpr {
@@ -240,7 +273,8 @@ impl ExpressionParser {
 }
 
 // current grammar:
-//Expression    ::= LogicalOr
+//Expression    ::= Assignment
+//Assignment ::= LogicalOr
 //LogicalOr        ::= LogicalAnd ( '|' LogicalAnd )*
 //LogicalAnd       ::= Relational ( '&' Relational )*
 //Relational       ::= Additive ( ('<' | '>' | '<=' | '>=') Additive )*
@@ -310,35 +344,40 @@ fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<
     // stack which tracks the latest scopes block variant reference
     let mut parent_stack : Vec<Rc<RefCell<Stmt>>> = Vec::new();
     // Parse the tokens
-    while let Some(token) = token_iter.next() {
+    while let Some(token) = token_iter.peek().cloned() {
         let mut stmt = match token {
             // parse int keyword
             Token::Keyword(Keyword::Type(Type::Integer)) => {
-                let name_tok = token_iter.next().expect("Expected name after integer keyword");
-                let name_string = match name_tok {
-                    Token::Identifier(name) => name,
-                    _ => return Err(format!("Illegal token after integer keyword: {:?}", name_tok))
+                token_iter.next();
+                let name_string = match token_iter.peek() {
+                    Some(Token::Identifier(name)) => name.clone(),
+                    _ => return Err(format!("Illegal token after integer keyword: {:?}", token_iter.peek()))
                 };
-                parse_variable_declaration(token_iter, &name_string)?
+                parse_variable_declaration(token_iter, &"int".to_string(), &name_string)?
             },
             Token::Keyword(Keyword::If) => {
+                token_iter.next();
                 parse_conditional(token_iter)?
             },
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
+                token_iter.next();
                 parse_return_statement(token_iter)?
             },
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
+                token_iter.next();
                 return Ok(scope_statements);
             },
             Token::Identifier(identifier) => {
                 handle_identifier_usage(token_iter, &identifier)?
             },
             Token::Keyword(Keyword::While) => {
+                token_iter.next();
                 handle_while_keyword(token_iter)?
             },
             Token::Keyword(Keyword::For) => {
+                token_iter.next();
                 handle_for_keyword(token_iter)?
             },
             // Skip any other tokens or syntax we don't support
@@ -357,20 +396,21 @@ fn handle_for_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<R
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
     // parse tokens after it to the first semicolon(initialisation)
     // three possible variants: 1) declaration of new var, 2) assignment to already declared one, 3) just semicolon
-    let init_root = match token_iter.next() {
+    let init_root = match token_iter.peek().cloned() {
         Some(Token::Identifier(identifier)) => {
             // Handle identifier usage (e.g., assignment to an already declared variable)
             Some(handle_identifier_usage(token_iter, &identifier)?)
         }
         Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => {
             // No initialization, just a semicolon
+            token_iter.next();
             None
         }
-        Some(Token::Type(_type)) => {
+        Some(Token::Type(var_type)) => {
             // Handle variable declaration
             match token_iter.next() {
                 Some(Token::Identifier(identifier)) => {
-                    Some(parse_variable_declaration(token_iter, &identifier)?)
+                    Some(parse_variable_declaration(token_iter, &var_type ,&identifier)?)
                 }
                 _ => {
                     return Err("Expected identifier after type keyword before first semicolon in for".to_string());
@@ -511,11 +551,12 @@ fn handle_identifier_usage(
     token_iter: &mut Peekable<IntoIter<Token>>,
     name: &String
 ) -> Result<Rc<RefCell<Stmt>>, String> {
-    match token_iter.peek() {
+    let mut iter_clone = token_iter.clone();
+    //consume identifier and peek token after
+    iter_clone.next();
+    match iter_clone.peek() {
         // var assignment
-       Some(Token::Operator(Operator::Equals)) => {
-           token_iter.next();
-
+       Some(Token::Operator(Operator::Assign)) => {
            let expression_root = parse_expression(token_iter)?;
            let var_node = Rc::new(RefCell::new(Stmt::VarAssignment {
                name: name.to_string(),
@@ -524,7 +565,8 @@ fn handle_identifier_usage(
            Ok(var_node)
        },
        Some(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) => {
-            Err("Function call not supported yet".to_string())
+
+           Err("Function call not supported yet".to_string())
        },
         _ => Err("Invalid symbol after identifier".to_string()),
     }
@@ -536,19 +578,26 @@ fn handle_identifier_usage(
 ///
 fn parse_integer_declaration(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
     if let Some(Token::Identifier(name)) = token_iter.peek().cloned() {
-        token_iter.next(); // consume name
-        if let Some(Token::SpecialCharacter(character)) = token_iter.peek() {
+        let mut cloned_iter = token_iter.clone();
+        let after_identifier = {
+            cloned_iter.next();
+            cloned_iter.peek()
+        };
+
+        if let Some(Token::SpecialCharacter(character)) = after_identifier {
             return match character {
                 SpecialCharacter::LeftParenthesis => {
+                    //consume name;
+                    token_iter.next();
                     parse_function_declaration(token_iter, &name)
                 },
                 SpecialCharacter::SemiColon => {
-                    parse_variable_declaration(token_iter, &name)
+                    parse_variable_declaration(token_iter, &"int".to_string(), &name)
                 },
                 _ => Err(format!("Unexpected special character after {:?}, integer declaration", character))
             }
-        } else if let Some(Token::Operator(Operator::Equals)) = token_iter.peek() {
-            return parse_variable_declaration(token_iter, &name)
+        } else if let Some(Token::Operator(Operator::Assign)) = after_identifier {
+            return parse_variable_declaration(token_iter, &"int".to_string(), &name)
         }
     }
     Err(format!("Unexpected token while parsing integer declaration: {:?}", token_iter.peek()))
@@ -579,34 +628,23 @@ fn parse_args(
 ) -> Option<Vec<Expr>> {
     None
 }
-
+///
+/// Gets 3 parameters: token iterator, variable name and type. However, name of variable should not
+/// be consumed, so the current element in iter must be identifier.
+///
+///
+///
 fn parse_variable_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    name: &String
+    var_type: &String,
+    var_name: &String,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
-        let int_var = Rc::new(RefCell::new(Stmt::VarDecl {
-            name: name.to_string(),
-            var_type: "int".to_string(),
-            expr: None,
-        }));
-        match token_iter.peek() {
-            Some(Token::Operator(Operator::Equals)) => {
-                token_iter.next();
-                let expression_root = parse_expression(token_iter)?;
-
-                Ok(Rc::new(RefCell::new(Stmt::VarDecl {
-                    name: name.to_string(),
-                    var_type: "int".to_string(),
-                    expr: Some(expression_root),
-                })))
-            },
-            Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => {
-                token_iter.next();
-                Ok(int_var)
-            },
-            None => Err("No tokens after int var identifier".to_string()),
-            _ =>  Err("Unexpected token while parsing variable declaration".to_string()),
-        }
+    let expression = parse_expression(token_iter)?;
+    Ok(Rc::new(RefCell::new(Stmt::VarDecl {
+        name: var_name.to_string(),
+        var_type: var_type.to_string(),
+        expr: Some(expression),
+    })))
 }
 
 fn parse_return_statement(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
@@ -680,7 +718,7 @@ mod tests {
             Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket),
             Token::Keyword(Keyword::Type(Integer)),
             Token::Identifier("var".to_string()),
-            Token::Operator(Operator::Equals),
+            Token::Operator(Operator::Assign),
             Token::Constant(Constant::Integer(11)),
             Token::SpecialCharacter(SpecialCharacter::SemiColon),
             Token::Keyword(Keyword::Return),
