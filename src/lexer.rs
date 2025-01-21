@@ -11,7 +11,7 @@ pub enum Token {
     Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
-    Type,
+    Type(Type),
     EndOFFile,
 }
 

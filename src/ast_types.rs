@@ -19,6 +19,12 @@ pub enum Stmt {
         else_branch: Option<Rc<RefCell<Stmt>>>
     },
     While { condition: Expr, body: Rc<RefCell<Stmt>>},
+    For {
+        initialization: Option<Rc<RefCell<Stmt>>>,
+        condition: Option<Expr>,
+        increment: Option<Expr>,
+        body: Option<Rc<RefCell<Stmt>>>
+    },
     Block(Vec<Rc<RefCell<Stmt>>>),
     Return(Option<Expr>)
 }

@@ -1,11 +1,13 @@
 use std::cell::{Ref, RefCell};
 use std::fmt::{format, Pointer};
 use std::iter::Peekable;
+use std::ptr::read;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Stmt::{Block, If};
+use crate::ast_types::Stmt::{Block, For, If};
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type};
+use crate::lexer::Operator::Plus;
 use crate::lexer::SpecialCharacter::LeftCurlyBracket;
 
 
@@ -336,6 +338,9 @@ fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<
             Token::Keyword(Keyword::While) => {
                 handle_while_keyword(token_iter)?
             },
+            Token::Keyword(Keyword::For) => {
+                handle_for_keyword(token_iter)?
+            },
             // Skip any other tokens or syntax we don't support
             _ => continue,
         };
@@ -345,6 +350,92 @@ fn parse_scope_tokens(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Vec<
         println!("{:?}", statement);
     }
     Ok(scope_statements)
+}
+
+fn handle_for_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
+    //Expect open parenthesis
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+    // parse tokens after it to the first semicolon(initialisation)
+    // three possible variants: 1) declaration of new var, 2) assignment to already declared one, 3) just semicolon
+    let init_root = match token_iter.next() {
+        Some(Token::Identifier(identifier)) => {
+            // Handle identifier usage (e.g., assignment to an already declared variable)
+            Some(handle_identifier_usage(token_iter, &identifier)?)
+        }
+        Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => {
+            // No initialization, just a semicolon
+            None
+        }
+        Some(Token::Type(_type)) => {
+            // Handle variable declaration
+            match token_iter.next() {
+                Some(Token::Identifier(identifier)) => {
+                    Some(parse_variable_declaration(token_iter, &identifier)?)
+                }
+                _ => {
+                    return Err("Expected identifier after type keyword before first semicolon in for".to_string());
+                }
+            }
+        }
+        Some(other) => {
+            // Invalid token
+            return Err(format!("Invalid token before first semicolon in for: {:?}", other));
+        }
+        None => {
+            // No token present
+            return Err("No token after for loop parenthesis opened".to_string());
+        }
+    };
+    // parse tokens between first and second semicolon(condition)
+    // either expression or semicolon
+    let mut is_semicolon = match token_iter.peek() {
+        None => return Err("No token after second semicolon in for loop".to_string()),
+        Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => true,
+        _=> false
+    };
+    let mut condition_root;
+    if is_semicolon {
+        condition_root = None
+    } else {
+        condition_root = Some(parse_expression(token_iter)?);
+    }
+
+    // parse tokens after second semicolon and right parenthesis(increment)
+    // either expression(s) or right parenthesis
+    is_semicolon = match token_iter.peek() {
+        None => return Err("No token after second semicolon in for loop".to_string()),
+        Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => true,
+        _=> false
+    };
+    let mut increment_root;
+    if is_semicolon {
+        increment_root = None
+    } else {
+        increment_root = Some(parse_expression(token_iter)?);
+    }
+    // parse loop body, if exists
+    let body_option : Option<Rc<RefCell<Stmt>>> = match token_iter.peek() {
+        None => return Err("No token after parsing for loop conditions".to_string()),
+        Some(token) => {
+            match token {
+                Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket) => {
+                    let body_vec = parse_scope_tokens(token_iter)?;
+                    Some(Rc::new(RefCell::new(Block(body_vec))))
+                },
+                Token::SpecialCharacter(SpecialCharacter::SemiColon)=> None,
+                _ => return Err("Invalid token after parsing for loop conditions".to_string())
+            }
+        }
+    };
+
+    let for_loop_body = Rc::new(RefCell::new(For {
+        initialization: init_root,
+        condition: condition_root,
+        increment: increment_root,
+        body: body_option,
+    }));
+
+    Ok(for_loop_body)
 }
 
 fn handle_while_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
