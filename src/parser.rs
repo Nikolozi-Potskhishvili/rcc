@@ -1,4 +1,5 @@
 use std::cell::{Ref, RefCell};
+use std::f32::consts::E;
 use std::fmt::{format, Pointer};
 use std::iter::Peekable;
 use std::ptr::read;
@@ -55,22 +56,31 @@ impl ExpressionParser {
         }
     }
 
+    // fn contains_assignment(&self) -> Result<bool, String> {
+    //    let contains = false;
+    //     for token in self.tokens { }
+    //     return false;
+    // }
+
     fn parse_expression(&mut self) -> Result<Expr, String> {
         self.parse_assignment()
     }
 
     fn parse_assignment(&mut self) -> Result<Expr, String> {
         println!("{:?} before parsing parsing an assignment", self.peek());
-        let mut lhs = self.parse_l_value().unwrap_or(self.parse_logical_or()?);
-        loop {
-            match self.peek() {
-                Token::Operator(Operator::Assign) | Token::Operator(Operator::IncrementAssign)
-                | Token::Operator(Operator::DecrementAssign) => {
-                    let operator = self.consume();
-                    let rhs = self.parse_assignment()?;
-                    return Ok(Self::create_binary_ast_node(operator, lhs, rhs));
-                },
-                _ => break,
+        let lhs = self.parse_logical_or()?;
+        let is_l = Self::is_l_value(&lhs);
+        if is_l {
+            loop {
+                match self.peek() {
+                    Token::Operator(Operator::Assign) | Token::Operator(Operator::IncrementAssign)
+                    | Token::Operator(Operator::DecrementAssign) => {
+                        let operator = self.consume();
+                        let rhs = self.parse_assignment()?;
+                        return Ok(Self::create_binary_ast_node(operator, lhs, rhs));
+                    },
+                    _ => break,
+                }
             }
         }
         Ok(lhs)
@@ -123,7 +133,7 @@ impl ExpressionParser {
                 Token::Operator(Operator::More) | Token::Operator(Operator::Less) => {
                     println!("Logical and logical relation operator parsed");
                     let operator = self.consume();
-                    let right_side = self.parse_logical_and()?;
+                    let right_side = self.parse_logical_relation_op()?;
                     let log_or_node = Self::create_binary_ast_node(operator, node, right_side);
                     node = log_or_node;
                 },
@@ -237,12 +247,20 @@ impl ExpressionParser {
                     Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
                         return Err("function identifiers are not l value".to_string());
                     }
-                    _ => Ok(Self::create_constant_ast_node(Token::Identifier(name.clone()))),
+                    _ => Ok(Self::crate_variable_node(name.clone())),
                 }
             }
             _ => Err(format!("token {:?} is not a correct l value", self.peek()))
         }
     }
+
+    fn is_l_value(expression: &Expr) -> bool {
+        if let Expr::VarUsage(var) = expression {
+             return true
+        }
+        false
+    }
+
     fn create_unary_ast_node(token: Token, operand: Expr) -> Expr {
         let unary_operator = token.get_operator().expect("not found unary operator during constructing node");
         Expr::UnaryExpr(UnaryExpr {
@@ -263,7 +281,7 @@ impl ExpressionParser {
     fn create_constant_ast_node(constant: Token) -> Expr {
         return match constant {
             Token::Constant(cnst) => Expr::Const(cnst),
-            _ => panic!("Unexpected token during parsing of expression")
+            _ => panic!("{}", format!("Unexpected token during parsing of expression: {:?}", constant))
         }
     }
 
@@ -520,8 +538,10 @@ fn parse_else_keyword(token_iter: &mut Peekable<IntoIter<Token>>, ) -> Result<Rc
 ///
 ///
 fn parse_conditional(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
+    println!("Parsing conditional");
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
     let bool_expression_root = parse_expression(token_iter)?;
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
     let statements = parse_scope_tokens(token_iter)?;
     let else_branch = match token_iter.peek() {
         None => None,
@@ -648,7 +668,6 @@ fn parse_variable_declaration(
 }
 
 fn parse_return_statement(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
-
     let expression_root = parse_expression(token_iter)?;
     let return_node = Rc::new(RefCell::new(Stmt::Return(Some(expression_root))));
     Ok(return_node)

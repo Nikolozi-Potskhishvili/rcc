@@ -6,7 +6,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::lexer::{Constant, Operator, Token, Type};
-
+#[derive(Clone, Debug, PartialEq)]
 struct Variable {
     var_type: Type,
     memory_offset: i64,
@@ -225,7 +225,7 @@ fn store_int_on_stack(
     if !var_table.contains_key((var_name)) {
         return Err(format!("Assigment without declaring a variable, {:?}", var_name))
     }
-    let var = var_table.get(var_name).unwrap();
+    let var = var_table.get(var_name).unwrap().clone();
 
     let mut instruction_vec = Vec::new();
     let mut free_registers = vec![8, 9, 10];
@@ -240,7 +240,7 @@ fn store_int_on_stack(
 ///
 fn generate_expression_instructions(
     expression_root: &Expr,
-    var_table: &HashMap<String, Variable>,
+    var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     free_registers: &mut Vec<i32>,
 ) -> Result<i32, String> {
@@ -253,7 +253,6 @@ fn generate_expression_instructions(
             if is_logical_operator(&operator) {
                 result_vec.push(format!("    cmp r{}, r{}", left_reg, right_reg));
                 let comp_res : &str = match operator {
-                    Operator::Assign => "",
                     Operator::And => "",
                     Operator::Or => "",
                     Operator::Less => "    setl al",
@@ -262,6 +261,14 @@ fn generate_expression_instructions(
                 };
                 result_vec.push(comp_res.to_string());
                 free_registers.push(right_reg);
+            } else if  let Operator::Assign = operator {
+                // expect l value on left
+                let l_val = match left.as_ref() {
+                    Expr::VarUsage(name) => name,
+                    _ => return Err("No l value before assignment operator".to_string())
+                };
+                let result = store_int_on_stack(l_val, right, var_table, &mut 1)?;
+                result_vec.push(result);
             } else {
                 result_vec.push(format!("    {} r{}, r{}", instruction, left_reg, right_reg));
                 free_registers.push(right_reg);
@@ -321,7 +328,7 @@ fn get_instruction_by_operator(operator: &Operator) -> Result<&str, String> {
 
 fn is_logical_operator(operator: &Operator) -> bool {
    return match operator {
-       Operator::Assign | Operator::Or | Operator::And | Operator::Less | Operator::More => true,
+        Operator::Or | Operator::And | Operator::Less | Operator::More => true,
         _ => false
    }
 }
@@ -331,7 +338,7 @@ fn is_logical_operator(operator: &Operator) -> bool {
 ///
 fn generate_logical_instruction(
     expression_root: &Expr,
-    var_table: &HashMap<String, Variable>,
+    var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     free_registers: &mut Vec<i32>,
 ) -> Result<i32, String> {
