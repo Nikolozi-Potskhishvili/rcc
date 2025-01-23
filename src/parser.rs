@@ -133,7 +133,7 @@ impl ExpressionParser {
                 Token::Operator(Operator::More) | Token::Operator(Operator::Less) => {
                     println!("Logical and logical relation operator parsed");
                     let operator = self.consume();
-                    let right_side = self.parse_logical_relation_op()?;
+                    let right_side = self.parse_logical_and()?;
                     let log_or_node = Self::create_binary_ast_node(operator, node, right_side);
                     node = log_or_node;
                 },
@@ -424,11 +424,12 @@ fn handle_for_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<R
             token_iter.next();
             None
         }
-        Some(Token::Type(var_type)) => {
+        Some(Token::Keyword(Keyword::Type(Type))) => {
             // Handle variable declaration
-            match token_iter.next() {
+            token_iter.next();
+            match token_iter.clone().peek() {
                 Some(Token::Identifier(identifier)) => {
-                    Some(parse_variable_declaration(token_iter, &var_type ,&identifier)?)
+                    Some(parse_variable_declaration(token_iter, &"int".to_string(),&identifier)?)
                 }
                 _ => {
                     return Err("Expected identifier after type keyword before first semicolon in for".to_string());
@@ -472,7 +473,7 @@ fn handle_for_keyword(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<R
         increment_root = Some(parse_expression(token_iter)?);
     }
     // parse loop body, if exists
-    let body_option : Option<Rc<RefCell<Stmt>>> = match token_iter.peek() {
+    let body_option : Option<Rc<RefCell<Stmt>>> = match token_iter.next() {
         None => return Err("No token after parsing for loop conditions".to_string()),
         Some(token) => {
             match token {

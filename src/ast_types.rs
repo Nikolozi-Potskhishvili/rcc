@@ -5,8 +5,8 @@ use crate::lexer::{Constant, Lexer, Operator, Token};
 #[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
     DummyExpr(Expr),
-    VarDecl { name: String, var_type: String, expr: Option<Expr>},
-    VarAssignment { name: String, expr: Option<Expr>},
+    VarDecl {name: String, var_type: String, expr: Option<Expr>},
+    VarAssignment {name: String, expr: Option<Expr>},
     FnDecl {
         name: String,
         return_type: String,

@@ -80,6 +80,14 @@ mod tests {
     }
 
     #[test]
+    fn for_cycle_tests() {
+        let file_name = "./test_files/for_loop_tests/all_fields.c";
+        let result = test_helper(file_name, 10);
+        clean_up_tests_files();
+        result.expect("tests panicked");
+    }
+
+    #[test]
     fn only_integer_return() {
         let result = test_helper("test.c", 2);
         clean_up_tests_files();

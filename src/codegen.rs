@@ -1,9 +1,10 @@
 use std::cell::{RefCell, RefMut};
-use std::collections::HashMap;
-use std::env::var;
+use std::collections::{HashMap, HashSet};
+use std::env::{remove_var, var};
 use std::fmt::format;
-use std::ops::Deref;
+use std::ops::{Add, Deref};
 use std::rc::Rc;
+use log::error;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::lexer::{Constant, Operator, Token, Type};
 #[derive(Clone, Debug, PartialEq)]
@@ -11,6 +12,7 @@ struct Variable {
     var_type: Type,
     memory_offset: i64,
     register: Option<String>,
+    defined: bool,
 }
 
 pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<String, String> {
@@ -19,7 +21,7 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
     let mut functions = String::new();
     //Keys are labels and value is number which is written after
     let mut labels : HashMap<String, i32> = HashMap::new();
-
+    let mut stack_ptr = 0;
     for child in ast_root_nodes {
         match & *child.borrow() {
             Stmt::FnDecl { name, return_type, args, body } => {
@@ -31,8 +33,9 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
                     functions += &format!(".global {}\n", assembly_fn_name);
                 }
                 functions += &format!("{}:\n", assembly_fn_name);
+                functions += &*"    push rbp\n    mov rbp, rsp\n".to_string();
                 if let Stmt::Block(ref statements) = *body.borrow() {
-                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels)?;
+                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels, &mut stack_ptr)?;
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
@@ -47,27 +50,37 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
 /// Generates Assembly instructions for given vector of Ast statements and vars declared in upper scope.
 ///
 /// Returns Result of String of x86_64 instructions tabulated by 4 spaces and separated by \n, or String error.
-fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut HashMap<String, Variable>, labels: &mut HashMap<String, i32>) -> Result<String, String> {
+fn gen_block_rec(
+    statements: &Vec<Rc<RefCell<Stmt>>>,
+    upper_scope_vars: &mut HashMap<String, Variable>,
+    labels: &mut HashMap<String, i32>,
+    stack_ptr: &mut i64)
+-> Result<String, String> {
     let mut result = String::new();
-    let mut stack_size = 0;
+    let mut local_stack = 0;
     let mut local_vars : Vec<String> = Vec::new();
+
     for stm in statements {
         match &*stm.borrow_mut() {
             Stmt::If { condition, then_branch, else_branch } => {
-                let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels)?;
+                let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels, stack_ptr)?;
                 result += conditional_instructions.as_str();
             },
             Stmt::While {condition, body} => {
-                let while_loop_instructions = generate_while_instructions(condition, body, upper_scope_vars, labels)?;
+                let while_loop_instructions = generate_while_instructions(condition, body, upper_scope_vars, labels, stack_ptr)?;
                 result += &*while_loop_instructions;
             },
+            Stmt::For {initialization, condition, increment, body} => {
+                let for_loop_instructions = generate_for_loop_instructions(upper_scope_vars, initialization, condition, increment, body, labels, stack_ptr)?;
+                result += &*for_loop_instructions;
+            },
             Stmt::VarDecl { name, var_type, expr } => {
-                let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, &mut stack_size)?;
+                let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut local_stack)?;
                 local_vars.push(name.clone());
                 result += &instructions;
                 result += "\n";
                 if expr.is_some() {
-                    let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, &mut stack_size)?;
+                    let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars)?;
                     result += &instructions;
                     result += "\n";
                 }
@@ -76,7 +89,7 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
                 if expr.is_none() {
                     return Err(format!("No expression is assigned to var: {}", name))
                 }
-                let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, &mut stack_size)?;
+                let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars)?;
                 result += &instructions;
             },
 
@@ -84,12 +97,13 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
                 if expr_option.is_none() {
                     return Err("No expression after return".to_string())
                 }
-                let (instructions, reg) = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars)?;
+                let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars)?;
                 result += &instructions;
-                result += "\n";
-                result += &format!("    mov rax, r{}\n", reg);
-                result += &format!("    add rsp, {}\n", stack_size);
+                result += &"    pop rax\n".to_string();
+                result += &format!("    add rsp, {}\n", local_stack);
+                result+= "    mov rsp, rbp\n    pop rbp\n";
                 result += "    ret\n";
+                *stack_ptr -= local_stack;
             }
             _ => {}
         }
@@ -104,37 +118,133 @@ fn gen_block_rec(statements: &Vec<Rc<RefCell<Stmt>>>, upper_scope_vars: &mut Has
     Ok(result)
 }
 
+fn generate_for_loop_instructions(
+    upper_scope_vars: &mut HashMap<String, Variable>,
+    init: &Option<Rc<RefCell<Stmt>>>,
+    condition: &Option<Expr>,
+    increment: &Option<Expr>,
+    body: &Option<Rc<RefCell<Stmt>>>,
+    labels: &mut HashMap<String, i32>,
+    stack_ptr: &mut i64,
+) -> Result<String, String> {
+
+    let last_for = labels.get("for_beg").copied().unwrap_or(0);
+    labels.insert("for_beg".to_string(), last_for + 1);
+    let last_end = labels.get("for_end").copied().unwrap_or(0);
+    labels.insert("for_end".to_string(), last_end + 1);
+    let last_increment = labels.get("for_inc").copied().unwrap_or(0);
+    labels.insert("for_inc".to_string(), last_increment + 1);
+
+    let mut result_vec = Vec::new();
+    let mut init_vars = HashSet::new();
+    // runs just one time
+    if init.is_some() {
+        let init_some = init.clone().unwrap();
+        let init_statements = generate_for_loop_init_instructions(init_some, &mut init_vars, upper_scope_vars, stack_ptr)?;
+        result_vec.push(init_statements);
+    }
+    result_vec.push(format!("for_beg{last_for}:\n"));
+    // is checked every time
+    if condition.is_some() {
+        let condition_some = condition.clone().unwrap();
+        generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec)?;
+        result_vec.push("    test al, al\n".to_string());
+        result_vec.push(format!("    jz for_end{last_end}\n"));
+        result_vec.push(format!("    jnz for_beg{last_for}\n"));
+    }
+    // runs after each time body ends
+    result_vec.push(format!("for_inc{last_increment}:\n"));
+    if increment.is_some() {
+        let increment_clone = increment.clone().unwrap();
+        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec)?;
+    }
+    result_vec.push(format!("    jmp for_beg{last_for}\n"));
+    if body.is_some() {
+        let body_clone = body.clone().unwrap();
+        let body_deref = body_clone.borrow_mut();
+        if let Stmt::Block(statements) = body_deref.clone() {
+            let instructions = gen_block_rec(&statements, upper_scope_vars, labels, stack_ptr)?;
+            result_vec.push(instructions);
+        } else {
+            return Err("Invalid statement in the for loop body".to_string());
+        }
+    }
+    result_vec.push(format!("    jmp for_beg{last_for}"));
+    result_vec.push(format!("for_end{last_end}:\n"));
+    result_vec.push(delete_out_of_scope_vars(&mut init_vars, upper_scope_vars)?);
+    Ok(result_vec.join("\n") + "\n")
+}
+
+fn generate_for_loop_init_instructions(
+    statement: Rc<RefCell<Stmt>>,
+    addedVars: &mut HashSet<String>,
+    upper_scope_vars: &mut HashMap<String, Variable>,
+    stack_ptr: &mut i64
+) -> Result<String, String> {
+    let statement_clone = statement.clone();
+    let statement_borrow= statement_clone.borrow_mut();
+    let statement_deref = statement_borrow.deref();
+    match statement_deref {
+        Stmt::VarDecl {name, var_type, expr, } => {
+            let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0)?;
+            addedVars.insert(name.clone());
+            Ok(instructions + "\n")
+        },
+        Stmt::VarAssignment {name, expr } => {
+            if expr.is_some() {
+                return Ok(store_int_on_stack(name, &expr.clone().unwrap(), upper_scope_vars)? + "\n")
+            }
+            Ok("".to_string())
+        },
+        _ => Err(format!("Invalid token in for loop int part: {:?}", statement_clone))
+    }
+}
+
+fn delete_out_of_scope_vars(
+    vars_to_delete: &HashSet<String>,
+    scope_vars: &mut HashMap<String, Variable>,
+) -> Result<String, String> {
+    let mut stack_offset = 0;
+    for var in vars_to_delete {
+        let var_type = scope_vars.get(var).ok_or_else(|| format!("No for init var in scope vars: {}", var))?;
+        stack_offset += get_size(var_type);
+        scope_vars.remove(var).unwrap();
+    }
+    Ok(format!("   add rsp {stack_offset}"))
+}
+
 fn generate_while_instructions(
     condition: &Expr,
     body: &Rc<RefCell<Stmt>>,
     upper_scope_vars: &mut HashMap<String, Variable>,
-    labels: &mut HashMap<String, i32>) -> Result<String, String> {
+    labels: &mut HashMap<String, i32>,
+    global_stack: &mut i64
+) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
-    let mut registers = vec![8, 9, 10];
 
-    let last_while = labels.get("while_label").copied().unwrap_or(0);
-    labels.insert("while_label".to_string(), last_while + 1);
-    let last_end = labels.get("end_label").copied().unwrap_or(0);
-    labels.insert("end_label".to_string(), last_end + 1);
+    let last_while = labels.get("while_beg").copied().unwrap_or(0);
+    labels.insert("while_beg".to_string(), last_while + 1);
+    let last_end = labels.get("while_end").copied().unwrap_or(0);
+    labels.insert("while_end".to_string(), last_end + 1);
 
-    result += &*format!("while_label{}:\n", last_while);
-    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, &mut registers)?;
+    result += &*format!("while_beg{}:\n", last_while);
+    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec)?;
     result += &*result_vec.join("\n");
     result += "\n";
     result += "    test al, al\n";
-    result += &*format!("    jz end_label{}\n", last_end);
+    result += &*format!("    jz while_end{}\n", last_end);
 
     let body_binding = body.borrow_mut();
     let body_vec = match body_binding.deref() {
         Stmt::Block(vec) => vec,
         _ => return Err("Unexpected AST node during parsing while body".to_string())
     };
-    let body_instructions = gen_block_rec(body_vec, upper_scope_vars, labels)?;
+    let body_instructions = gen_block_rec(body_vec, upper_scope_vars, labels, global_stack)?;
     result += &*body_instructions;
     result += "\n";
-    result += &*format!("    jmp while_label{}\n", last_while);
-    result += &*format!("end_label{}:\n", last_end);
+    result += &*format!("    jmp while_beg{}\n", last_while);
+    result += &*format!("while_end{}:\n", last_end);
     Ok(result)
 }
 
@@ -144,11 +254,11 @@ fn generate_if_else_instructions(
     else_branch: &Option<Rc<RefCell<Stmt>>>,
     upper_scope_vars: &mut HashMap<String, Variable>,
     labels: &mut HashMap<String, i32>,
+    global_stack: &mut i64
 ) -> Result<String, String> {
     let mut result = String::new();
-    let mut free_registers = vec![8, 9, 10];
     let mut result_vec = Vec::new();
-    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, &mut free_registers)?;
+    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec)?;
     result += &*result_vec.join("\n");
     result += "\n";
 
@@ -170,7 +280,7 @@ fn generate_if_else_instructions(
         _ => return Err(format!("Unexpected token {:?}, during generating code for if block", then_branch))
     };
     result += format!("if_label{}:\n", if_label_number).as_str();
-    let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels)?;
+    let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels, global_stack)?;
     result += &*then_instructions;
     result += format!("\n    jmp end_label{}\n", end_label_number).as_str();;
 
@@ -178,10 +288,10 @@ fn generate_if_else_instructions(
         result += format!("else_label{}:\n", else_label_number).as_str();
         match &*else_branch_deref.borrow_mut() {
             Stmt::If { condition, then_branch, else_branch } => {
-                result += &*generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels)?;
+                result += &*generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels, global_stack)?;
             }
             Stmt::Block(statements) => {
-                result += &*gen_block_rec(statements, upper_scope_vars, labels)?;
+                result += &*gen_block_rec(statements, upper_scope_vars, labels, global_stack)?;
             }
             _ => return Err(format!("Unexpected statement in place of else branch: {:?}", else_branch))
         };
@@ -193,24 +303,26 @@ fn generate_if_else_instructions(
 fn generate_return_instructions(
     expression_root: &Expr,
     var_table: &mut HashMap<String, Variable>,
-) -> Result<(String, i32), String> {
+) -> Result<(String), String> {
     let mut instruction_vec = Vec::new();
-    let mut free_registers = vec![8, 9, 10];
-    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, &mut free_registers)?;
-    Ok((instruction_vec.join("\n"), reg))
+    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec)?;
+    Ok(instruction_vec.join("\n") + "\n")
 }
 fn allocate_int_on_stack(
     var_name: &String,
     var_type: &String,
     var_table: &mut HashMap<String, Variable>,
-    cur_stack_size: &mut i64
+    cur_stack_size: &mut i64,
+    local_stack_size: &mut i64
 ) -> Result<String, String> {
-    *cur_stack_size += 8;
     var_table.insert(var_name.clone(), Variable {
         var_type: Type::Integer,
-        memory_offset: *cur_stack_size - 8,
+        memory_offset: *cur_stack_size + 8,
         register: None,
+        defined: false,
     });
+    *local_stack_size += 8;
+    *cur_stack_size += 8;
     let instruction = "    sub rsp, 8".to_string();
     Ok(instruction)
 }
@@ -219,7 +331,6 @@ fn store_int_on_stack(
     var_name: &String,
     expr: &Expr,
     var_table: &mut HashMap<String, Variable>,
-    cur_stack_size: &mut i64,
 ) -> Result<String, String> {
 
     if !var_table.contains_key((var_name)) {
@@ -228,9 +339,7 @@ fn store_int_on_stack(
     let var = var_table.get(var_name).unwrap().clone();
 
     let mut instruction_vec = Vec::new();
-    let mut free_registers = vec![8, 9, 10];
-    let reg = generate_expression_instructions(expr, var_table, &mut instruction_vec, &mut free_registers)?;
-    instruction_vec.push(format!("    mov [rsp + {}], r{}", var.memory_offset, reg));
+    let mem_offset = generate_expression_instructions(expr, var_table, &mut instruction_vec)?;
     Ok(instruction_vec.join("\n"))
 }
 ///
@@ -242,62 +351,19 @@ fn generate_expression_instructions(
     expression_root: &Expr,
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
-    free_registers: &mut Vec<i32>,
-) -> Result<i32, String> {
+) -> Result<(), String> {
     let current_node = expression_root;
     return match current_node {
         Expr::BinaryExpr(BinaryExpression{left, right, operator })=> {
-            let left_reg = generate_expression_instructions(left, var_table, result_vec, free_registers)?;
-            let right_reg = generate_expression_instructions(right, var_table, result_vec, free_registers)?;
-            let instruction = get_instruction_by_operator(&operator)?;
-            if is_logical_operator(&operator) {
-                result_vec.push(format!("    cmp r{}, r{}", left_reg, right_reg));
-                let comp_res : &str = match operator {
-                    Operator::And => "",
-                    Operator::Or => "",
-                    Operator::Less => "    setl al",
-                    Operator::More => "    setg al",
-                    _ => return Err(format!("Unexpected operator: {:?}, during codgen of logical op", operator))
-                };
-                result_vec.push(comp_res.to_string());
-                free_registers.push(right_reg);
-            } else if  let Operator::Assign = operator {
-                // expect l value on left
-                let l_val = match left.as_ref() {
-                    Expr::VarUsage(name) => name,
-                    _ => return Err("No l value before assignment operator".to_string())
-                };
-                let result = store_int_on_stack(l_val, right, var_table, &mut 1)?;
-                result_vec.push(result);
-            } else {
-                result_vec.push(format!("    {} r{}, r{}", instruction, left_reg, right_reg));
-                free_registers.push(right_reg);
-            }
-            Ok(left_reg)
+            Ok(generate_binary_institution(left, right, operator.clone(), var_table, result_vec)?)
         },
         Expr::UnaryExpr(UnaryExpr{ operator, operand }) => {
-            let register = generate_expression_instructions(operand, var_table, result_vec, free_registers)?;
-
-            let instruction = match operator {
-                Operator::Not => {
-                    result_vec.push(format!("    test r{}, r{}", register, register));
-                    result_vec.push("    setz al".to_string());
-                    result_vec.push(format!("    movzx r{}, al", register));
-                    return Ok(register);
-                },
-                Operator::Tilde => "not",
-                Operator::Minus => "neg",
-                _ => return Err("Unsupported operator".to_string())
-            };
-            println!("Yo We are generating fucking unary operation: {}", instruction);
-            result_vec.push(format!("    {} r{}", instruction, register));
-            Ok(register)
+            Ok(generate_unary_instructions(operand, operator.clone(), var_table, result_vec)?)
         },
         Expr::Const(Constant::Integer(value)) => {
-            let reg = free_registers.pop().unwrap();
-            result_vec.push(format!("    mov r{}, 0", reg));
-            result_vec.push(format!("    add r{}, {}", reg, *value));
-            Ok(reg)
+            result_vec.push(format!("    mov r8, {}", *value));
+            result_vec.push(push_from_reg_on_stack(8));
+            Ok(())
         },
         Expr::VarUsage(var_name) => {
             let memory_offset_op = var_table.get(var_name);
@@ -305,12 +371,99 @@ fn generate_expression_instructions(
                 return Err(format!("Variable {}, was not defined", var_name))
             }
             let memory_offset = memory_offset_op.unwrap().memory_offset;
-            let register = free_registers.pop().unwrap();
-            result_vec.push(format!("    mov r{}, [RSP + {}]", register, memory_offset));
-            Ok(register)
+            result_vec.push(format!("    mov r8, [rbp - {}]", memory_offset));
+            result_vec.push(push_from_reg_on_stack(8));
+            Ok(())
         },
         _ => Err("Invalid node type during expression codgen".to_string())
     }
+}
+
+/// Generates asm instructions for binary expression. returns i32 which represent stack of offset where value is stored
+///
+///
+fn generate_binary_institution(
+    left: &Expr,
+    right: &Expr,
+    operator: Operator,
+    var_table: &mut HashMap<String, Variable>,
+    result_vec: &mut Vec<String>,
+) -> Result<(), String> {
+
+    let right_offset= generate_expression_instructions(right, var_table, result_vec)?;
+    let load_right = pop_into_reg_instruction(9);
+
+    if  let Operator::Assign = operator {
+        // expect l value on left
+        let l_val = match left {
+            Expr::VarUsage(name) => name,
+            _ => return Err("No l value before assignment operator".to_string())
+            };
+        if !var_table.contains_key(l_val) {
+            return Err(format!("No declared var as:{l_val}").to_string())
+        }
+        let var = var_table.get(l_val).unwrap();
+        let var_offset = var.memory_offset;
+        result_vec.push(load_right);
+        result_vec.push(format!("    mov [rbp - {var_offset}], r9"));
+        return Ok(())
+    }
+
+    let left_offset = generate_expression_instructions(left, var_table, result_vec)?;
+    let load_left = pop_into_reg_instruction(8);
+    result_vec.push(load_left);
+    result_vec.push(load_right);
+
+    let instruction = get_instruction_by_operator(&operator)?;
+    if is_logical_operator(&operator) {
+        result_vec.push("    cmp r8, r9".to_string());
+        let comp_res : &str = match operator {
+            Operator::And => "",
+            Operator::Or => "",
+            Operator::Less => "    setl al",
+            Operator::More => "    setg al",
+            _ => return Err(format!("Unexpected operator: {:?}, during codgen of logical op", operator))
+        };
+        result_vec.push(comp_res.to_string());
+    } else {
+        result_vec.push(format!("    {} r8, r9", instruction));
+    }
+
+    result_vec.push(push_from_reg_on_stack(8));
+    Ok(())
+}
+
+fn generate_unary_instructions(
+    operand: &Expr,
+    operator: Operator,
+    var_table: &mut HashMap<String, Variable>,
+    result_vec: &mut Vec<String>,
+) -> Result<(), String> {
+    let mem_offset = generate_expression_instructions(operand, var_table, result_vec)?;
+    let load_temp_res = pop_into_reg_instruction(8);
+    result_vec.push(load_temp_res);
+    let instruction = match operator {
+        Operator::Not => {
+            result_vec.push("    test r8, r8".to_string());
+            result_vec.push("    setz al".to_string());
+            result_vec.push("    movzx r8, al".to_string());
+            result_vec.push(push_from_reg_on_stack(8));
+            return Ok(());
+        },
+        Operator::Tilde => "not",
+        Operator::Minus => "neg",
+        _ => return Err("Unsupported operator".to_string())
+    };
+    result_vec.push(format!("    {} r8", instruction));
+    result_vec.push(push_from_reg_on_stack(8));
+    Ok(())
+}
+
+enum StorageLocation {
+    // register number
+    Register(i32),
+    //memory offset
+    Memory(i32),
 }
 
 fn get_instruction_by_operator(operator: &Operator) -> Result<&str, String> {
@@ -333,43 +486,20 @@ fn is_logical_operator(operator: &Operator) -> bool {
    }
 }
 
-/// Generates instructions for logical expressions: And, Or, Less than, More than
-///
-///
-fn generate_logical_instruction(
-    expression_root: &Expr,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    free_registers: &mut Vec<i32>,
-) -> Result<i32, String> {
-    match expression_root {
-        Expr::BinaryExpr(expr) => {
-            let (left, right, operator) = (&expr.right, &expr.left, &expr.operator);
-            match operator {
-                Operator::Assign => {}
-                Operator::And => {}
-                Operator::Or => {
-
-                }
-                Operator::Less => {
-                    let left_reg = generate_expression_instructions(left.as_ref(), var_table, result_vec, free_registers)?;
-                    let right_reg = generate_expression_instructions(right.as_ref(), var_table, result_vec, free_registers)?;
-                    result_vec.push(format!("    cmp r{}, r{}", left_reg, right_reg));
-                    free_registers.push(right_reg);
-                    result_vec.push(format!("   setl al"));
-                }
-                Operator::More => {
-                    let left_reg = generate_expression_instructions(left.as_ref(), var_table, result_vec, free_registers)?;
-                    let right_reg = generate_expression_instructions(right.as_ref(), var_table, result_vec, free_registers)?;
-                    result_vec.push(format!("    cmp r{}, r{}", left_reg, right_reg));
-                    free_registers.push(right_reg);
-                    //result_vec.push(format!("   setle al"));
-                }
-                _=> return Err(format!("Unexpected operator {:?} during paring of logical expression root", operator))
-            }
-        }
-        _ => return Err(format!("{:?} Unexpected expression Node during codgen for logical instructions", expression_root))
-
+fn get_size(var: &Variable) -> i64 {
+    match var.var_type {
+        Type::Integer => 8,
+        _ => 0,
     }
-    return Ok(0)
+}
+
+
+/// Generates Instructions for loading var from mem to register
+///
+fn pop_into_reg_instruction(reg: i32) -> String {
+    format!("    pop r{reg}").to_string()
+}
+
+fn push_from_reg_on_stack(reg: i32) -> String {
+    format!("    push r{reg}")
 }

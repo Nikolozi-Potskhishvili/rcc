@@ -1,4 +1,5 @@
 use crate::lexer::FoundLongToken::{Found, NotFound};
+use crate::lexer::Type::Long;
 
 ///
 /// The most upper-level representation of token
@@ -80,6 +81,10 @@ pub enum Operator {
     Tilde,
     Less,
     More,
+    Deref,
+    Ref,
+    PrefixInc,
+    PostfixInc,
 }
 
 impl Operator {
@@ -210,6 +215,18 @@ fn parse_long_token(s: &str) -> Option<Token> {
     }
 }
 
+fn get_type(string: &str) -> Result<Type, String> {
+    match string {
+        "int" => Ok(Type::Integer),
+        "short" => Ok(Type::Short),
+        "long" => Ok(Type::Long),
+        "double" => Ok(Type::Double),
+        "float" => Ok(Type::Float),
+        "char" => Ok(Type::Char),
+        _ => Err(format!("Unrecognized type: {string}")),
+    }
+}
+
 enum FoundLongToken {
     Found(Vec<Token>),
     NotFound(Vec<Token>),
@@ -264,12 +281,12 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
 
 fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
      match token {
-        "int" => Ok(Keyword::Type(Type::Integer)),
-        "for" => Ok(Keyword::For),
-        "while" => Ok(Keyword::While),
-        "if" => Ok(Keyword::If),
-        "else" => Ok(Keyword::Else),
-        "return" => Ok(Keyword::Return),
+         "int" => Ok(Keyword::Type(Type::Integer)),
+         "for" => Ok(Keyword::For),
+         "while" => Ok(Keyword::While),
+         "if" => Ok(Keyword::If),
+         "else" => Ok(Keyword::Else),
+         "return" => Ok(Keyword::Return),
         _ => Err("unexpected error during parsing keyword"),
     }
 }
