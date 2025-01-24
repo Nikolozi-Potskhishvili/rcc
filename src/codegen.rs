@@ -78,7 +78,6 @@ fn gen_block_rec(
                 let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut local_stack)?;
                 local_vars.push(name.clone());
                 result += &instructions;
-                result += "\n";
                 if expr.is_some() {
                     let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars)?;
                     result += &instructions;
@@ -143,22 +142,15 @@ fn generate_for_loop_instructions(
         let init_statements = generate_for_loop_init_instructions(init_some, &mut init_vars, upper_scope_vars, stack_ptr)?;
         result_vec.push(init_statements);
     }
-    result_vec.push(format!("for_beg{last_for}:\n"));
+    result_vec.push(format!("for_beg{last_for}:"));
     // is checked every time
     if condition.is_some() {
         let condition_some = condition.clone().unwrap();
         generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec)?;
-        result_vec.push("    test al, al\n".to_string());
-        result_vec.push(format!("    jz for_end{last_end}\n"));
-        result_vec.push(format!("    jnz for_beg{last_for}\n"));
+        result_vec.push(pop_into_reg_instruction(8));
+        result_vec.push("    test al, al".to_string());
+        result_vec.push(format!("    jz for_end{last_end}"));
     }
-    // runs after each time body ends
-    result_vec.push(format!("for_inc{last_increment}:\n"));
-    if increment.is_some() {
-        let increment_clone = increment.clone().unwrap();
-        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec)?;
-    }
-    result_vec.push(format!("    jmp for_beg{last_for}\n"));
     if body.is_some() {
         let body_clone = body.clone().unwrap();
         let body_deref = body_clone.borrow_mut();
@@ -169,8 +161,14 @@ fn generate_for_loop_instructions(
             return Err("Invalid statement in the for loop body".to_string());
         }
     }
+    // runs after each time body ends
+    //result_vec.push(format!("for_inc{last_increment}:"));
+    if increment.is_some() {
+        let increment_clone = increment.clone().unwrap();
+        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec)?;
+    }
     result_vec.push(format!("    jmp for_beg{last_for}"));
-    result_vec.push(format!("for_end{last_end}:\n"));
+    result_vec.push(format!("for_end{last_end}:"));
     result_vec.push(delete_out_of_scope_vars(&mut init_vars, upper_scope_vars)?);
     Ok(result_vec.join("\n") + "\n")
 }
@@ -186,9 +184,13 @@ fn generate_for_loop_init_instructions(
     let statement_deref = statement_borrow.deref();
     match statement_deref {
         Stmt::VarDecl {name, var_type, expr, } => {
-            let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0)?;
+            let mut instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0)?;
+            let expr_unwrap = expr.clone().unwrap();
+            let mut result_vec = Vec::new();
+            let expr_instructions = generate_expression_instructions(&expr_unwrap ,upper_scope_vars, &mut result_vec);
+            instructions += &*result_vec.join("\n");
             addedVars.insert(name.clone());
-            Ok(instructions + "\n")
+            Ok(instructions)
         },
         Stmt::VarAssignment {name, expr } => {
             if expr.is_some() {
@@ -210,7 +212,7 @@ fn delete_out_of_scope_vars(
         stack_offset += get_size(var_type);
         scope_vars.remove(var).unwrap();
     }
-    Ok(format!("   add rsp {stack_offset}"))
+    Ok(format!("    add rsp, {stack_offset}"))
 }
 
 fn generate_while_instructions(
@@ -268,7 +270,8 @@ fn generate_if_else_instructions(
     labels.insert("else_label".to_string(), else_label_number + 1);
     let end_label_number = labels.get("end_label").copied().unwrap_or(0);
     labels.insert("end_label".to_string(), end_label_number + 1);
-    result += format!("    cmp al, 1\n    je if_label{}\n", if_label_number).as_str();
+    result += &*pop_into_reg_instruction(8);
+    result += format!("\n    cmp al, 1\n    je if_label{}\n", if_label_number).as_str();
     if else_branch.is_some() {
         result += format!("    jmp else_label{}\n", else_label_number).as_str();
     }
@@ -323,7 +326,7 @@ fn allocate_int_on_stack(
     });
     *local_stack_size += 8;
     *cur_stack_size += 8;
-    let instruction = "    sub rsp, 8".to_string();
+    let instruction = "    sub rsp, 8\n".to_string();
     Ok(instruction)
 }
 
@@ -428,7 +431,7 @@ fn generate_binary_institution(
     } else {
         result_vec.push(format!("    {} r8, r9", instruction));
     }
-
+    //result_vec.push("    movzx r8, al".to_string());
     result_vec.push(push_from_reg_on_stack(8));
     Ok(())
 }
