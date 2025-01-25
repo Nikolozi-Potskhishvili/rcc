@@ -1,10 +1,11 @@
 #![recursion_limit = "512"]
 use std::{env, fs};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::process::{Command, ExitStatus};
 use crate::codegen::generate_assembly;
-use crate::lexer::Lexer;
+use crate::lexer::{Lexer, Type};
 use crate::parser::{generate_ast_tree, print_ast};
 
 mod lexer;
@@ -29,10 +30,11 @@ fn get_source_code(file_name: &String) -> String {
 
 fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
-
-    let ast_tree = generate_ast_tree(tokens).expect("Problem creating AST tree");
+    let mut type_map = init_type_map();
+    let mut symbol_table = HashMap::new();
+    let mut ast_tree = generate_ast_tree(tokens, &mut type_map, &mut symbol_table).expect("Problem creating AST tree");
     print_ast(&ast_tree);
-    let code = generate_assembly(&ast_tree).expect("expected no errors in codegen");
+    let code = generate_assembly(&ast_tree, &mut type_map, &mut symbol_table).expect("expected no errors in codegen");
     for line in code.lines() {
         println!("{}", line);
     }
@@ -46,7 +48,15 @@ fn compile_source_code(source_code: String) -> ExitStatus {
     compile_status
 }
 
-
+fn init_type_map() -> HashMap<String, Type> {
+    HashMap::from([
+        ("int".to_string(), Type::Primitive("int".to_string())),
+        ("short".to_string(), Type::Primitive("short".to_string())),
+        ("long".to_string(), Type::Primitive("long".to_string())),
+        ("bool".to_string(), Type::Primitive("bool".to_string())),
+        ("char".to_string(), Type::Primitive("char".to_string())),
+    ])
+}
 
 #[cfg(test)]
 mod tests {
@@ -161,11 +171,20 @@ mod tests {
         result.expect("failed");
     }
 
-
     #[test]
     fn test_mixed_ar_expressions() {
         let file_name = String::from("./test_files/test_mult_of_sums.c");
         let expected_val = 45;
+
+        let result = test_helper(&file_name, expected_val);
+        clean_up_tests_files();
+        result.expect("failed");
+    }
+
+    #[test]
+    fn test_refs() {
+        let file_name = String::from("./test_files/ref_deref_tests/simple_ref.c");
+        let expected_val = 69;
 
         let result = test_helper(&file_name, expected_val);
         clean_up_tests_files();

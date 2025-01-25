@@ -1,5 +1,4 @@
 use crate::lexer::FoundLongToken::{Found, NotFound};
-use crate::lexer::Type::Long;
 
 ///
 /// The most upper-level representation of token
@@ -12,7 +11,7 @@ pub enum Token {
     Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
-    Type(String),
+    Type(Type),
     EndOFFile,
 }
 
@@ -36,16 +35,21 @@ impl Token {
     }
 }
 /// Primitive types. Currently, Are supported: Integer, Flout, Double, Char, Short, Long
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Type {
-    Integer,
-    Float,
-    Double,
-    Char,
-    Short,
-    Long,
-    Void,
+    Primitive(String),
+    Pointer(Box<Type>),
+    Array(Box<Type>, usize),
+    Struct(String),
+    Function,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructDef {
+    name: String,
+    fields: Vec<(String, Type)>,
+}
+
 ///
 /// Keywords, currently supported: Type(Type), Return, Void, For, While, If, Else And SizeOf
 ///
@@ -59,6 +63,7 @@ pub enum Keyword {
     If,
     Else,
     SizeOf,
+    TypeDef,
 }
 
 ///
@@ -124,13 +129,13 @@ pub enum Constant {
 impl Constant {
     pub fn get_type(&self) -> Type {
        match self {
-           Constant::Integer(_) => Type::Integer,
-           Constant::Short(_) => Type::Short,
-           Constant::Long(_) => Type::Long,
-           Constant::Double(_) => Type::Double,
-           Constant::Float(_) => Type::Float,
-           Constant::Char(_) => Type::Char,
-           Constant::Undefined => Type::Void,
+           Constant::Integer(_) => Type::Primitive("int".to_string()),
+           Constant::Short(_) => Type::Primitive("short".to_string()),
+           Constant::Long(_) => Type::Primitive("long".to_string()),
+           Constant::Double(_) => Type::Primitive("double".to_string()),
+           Constant::Float(_) => Type::Primitive("float".to_string()),
+           Constant::Char(_) => Type::Primitive("char".to_string()),
+           Constant::Undefined => Type::Function,
        }
     }
 
@@ -217,12 +222,12 @@ fn parse_long_token(s: &str) -> Option<Token> {
 
 fn get_type(string: &str) -> Result<Type, String> {
     match string {
-        "int" => Ok(Type::Integer),
-        "short" => Ok(Type::Short),
-        "long" => Ok(Type::Long),
-        "double" => Ok(Type::Double),
-        "float" => Ok(Type::Float),
-        "char" => Ok(Type::Char),
+        "int" => Ok(Type::Primitive("int".to_string())),
+        // "short" => Ok(Type::Short),
+        // "long" => Ok(Type::Long),
+        // "double" => Ok(Type::Double),
+        // "float" => Ok(Type::Float),
+        // "char" => Ok(Type::Char),
         _ => Err(format!("Unrecognized type: {string}")),
     }
 }
@@ -281,7 +286,7 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
 
 fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
      match token {
-         "int" => Ok(Keyword::Type(Type::Integer)),
+         "int" => Ok(Keyword::Type(Type::Primitive("int".to_string()))),
          "for" => Ok(Keyword::For),
          "while" => Ok(Keyword::While),
          "if" => Ok(Keyword::If),
@@ -302,6 +307,7 @@ fn get_operator(token: &str) -> Result<Operator, String> {
         "=" => Ok(Operator::Assign),
         "<" => Ok(Operator::Less),
         ">" => Ok(Operator::More),
+        "&" => Ok(Operator::Ref),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }

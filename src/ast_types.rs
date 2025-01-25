@@ -1,16 +1,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::lexer::{Constant, Lexer, Operator, Token};
+use crate::lexer::{Constant, Lexer, Operator, Token, Type};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
     DummyExpr(Expr),
-    VarDecl {name: String, var_type: String, expr: Option<Expr>},
+    VarDecl {name: String, var_type: Type, expr: Option<Expr>},
     VarAssignment {name: String, expr: Option<Expr>},
     FnDecl {
         name: String,
-        return_type: String,
-        args: Option<Vec<Expr>>,
+        return_type: Type,
+        args: Option<Vec<Stmt>>,
         body: Rc<RefCell<Stmt>>
     },
     If {

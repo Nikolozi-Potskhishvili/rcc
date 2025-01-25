@@ -1,21 +1,37 @@
-use std::cell::{RefCell, RefMut};
+use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
-use std::env::{remove_var, var};
 use std::fmt::format;
-use std::ops::{Add, Deref};
+use std::hash::Hash;
+use std::ops::{Deref};
 use std::rc::Rc;
-use log::error;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::lexer::{Constant, Operator, Token, Type};
+use crate::lexer::{Constant, Operator, StructDef, Type};
 #[derive(Clone, Debug, PartialEq)]
 struct Variable {
     var_type: Type,
     memory_offset: i64,
     register: Option<String>,
     defined: bool,
+    pointer: bool,
 }
 
-pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<String, String> {
+enum VariableState {
+    Undefined,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Scope {
+    Global,
+    Static,
+    Local,
+    Argument,
+}
+
+pub fn generate_assembly(
+    ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, StructDef>,
+) -> Result<String, String> {
     let mut result = String::new();
     let mut global_vars = HashMap::new();
     let mut functions = String::new();
@@ -35,7 +51,7 @@ pub fn generate_assembly(ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>) -> Result<Stri
                 functions += &format!("{}:\n", assembly_fn_name);
                 functions += &*"    push rbp\n    mov rbp, rsp\n".to_string();
                 if let Stmt::Block(ref statements) = *body.borrow() {
-                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels, &mut stack_ptr)?;
+                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels, &mut stack_ptr, type_map, symbol_table)?;
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
@@ -54,8 +70,10 @@ fn gen_block_rec(
     statements: &Vec<Rc<RefCell<Stmt>>>,
     upper_scope_vars: &mut HashMap<String, Variable>,
     labels: &mut HashMap<String, i32>,
-    stack_ptr: &mut i64)
--> Result<String, String> {
+    stack_ptr: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
+) -> Result<String, String> {
     let mut result = String::new();
     let mut local_stack = 0;
     let mut local_vars : Vec<String> = Vec::new();
@@ -63,23 +81,24 @@ fn gen_block_rec(
     for stm in statements {
         match &*stm.borrow_mut() {
             Stmt::If { condition, then_branch, else_branch } => {
-                let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels, stack_ptr)?;
+                let conditional_instructions = generate_if_else_instructions(condition, then_branch, else_branch,
+                                                                             upper_scope_vars, labels, stack_ptr, type_map, symbol_table)?;
                 result += conditional_instructions.as_str();
             },
             Stmt::While {condition, body} => {
-                let while_loop_instructions = generate_while_instructions(condition, body, upper_scope_vars, labels, stack_ptr)?;
+                let while_loop_instructions = generate_while_instructions(condition, body, upper_scope_vars, labels, stack_ptr, type_map, symbol_table)?;
                 result += &*while_loop_instructions;
             },
             Stmt::For {initialization, condition, increment, body} => {
-                let for_loop_instructions = generate_for_loop_instructions(upper_scope_vars, initialization, condition, increment, body, labels, stack_ptr)?;
+                let for_loop_instructions = generate_for_loop_instructions(upper_scope_vars, initialization, condition, increment, body, labels, stack_ptr, type_map, symbol_table)?;
                 result += &*for_loop_instructions;
             },
             Stmt::VarDecl { name, var_type, expr } => {
-                let instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut local_stack)?;
+                let instructions = allocate_var_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut local_stack, type_map, symbol_table)?;
                 local_vars.push(name.clone());
                 result += &instructions;
                 if expr.is_some() {
-                    let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars)?;
+                    let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
                     result += &instructions;
                     result += "\n";
                 }
@@ -88,7 +107,7 @@ fn gen_block_rec(
                 if expr.is_none() {
                     return Err(format!("No expression is assigned to var: {}", name))
                 }
-                let instructions = store_int_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars)?;
+                let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
                 result += &instructions;
             },
 
@@ -96,7 +115,7 @@ fn gen_block_rec(
                 if expr_option.is_none() {
                     return Err("No expression after return".to_string())
                 }
-                let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars)?;
+                let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
                 result += &instructions;
                 result += &"    pop rax\n".to_string();
                 result += &format!("    add rsp, {}\n", local_stack);
@@ -125,6 +144,8 @@ fn generate_for_loop_instructions(
     body: &Option<Rc<RefCell<Stmt>>>,
     labels: &mut HashMap<String, i32>,
     stack_ptr: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
 
     let last_for = labels.get("for_beg").copied().unwrap_or(0);
@@ -139,14 +160,14 @@ fn generate_for_loop_instructions(
     // runs just one time
     if init.is_some() {
         let init_some = init.clone().unwrap();
-        let init_statements = generate_for_loop_init_instructions(init_some, &mut init_vars, upper_scope_vars, stack_ptr)?;
+        let init_statements = generate_for_loop_init_instructions(init_some, &mut init_vars, upper_scope_vars, stack_ptr, type_map, symbol_table)?;
         result_vec.push(init_statements);
     }
     result_vec.push(format!("for_beg{last_for}:"));
     // is checked every time
     if condition.is_some() {
         let condition_some = condition.clone().unwrap();
-        generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec)?;
+        generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
         result_vec.push(pop_into_reg_instruction(8));
         result_vec.push("    test al, al".to_string());
         result_vec.push(format!("    jz for_end{last_end}"));
@@ -155,7 +176,7 @@ fn generate_for_loop_instructions(
         let body_clone = body.clone().unwrap();
         let body_deref = body_clone.borrow_mut();
         if let Stmt::Block(statements) = body_deref.clone() {
-            let instructions = gen_block_rec(&statements, upper_scope_vars, labels, stack_ptr)?;
+            let instructions = gen_block_rec(&statements, upper_scope_vars, labels, stack_ptr, type_map, symbol_table)?;
             result_vec.push(instructions);
         } else {
             return Err("Invalid statement in the for loop body".to_string());
@@ -165,11 +186,11 @@ fn generate_for_loop_instructions(
     //result_vec.push(format!("for_inc{last_increment}:"));
     if increment.is_some() {
         let increment_clone = increment.clone().unwrap();
-        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec)?;
+        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
     }
     result_vec.push(format!("    jmp for_beg{last_for}"));
     result_vec.push(format!("for_end{last_end}:"));
-    result_vec.push(delete_out_of_scope_vars(&mut init_vars, upper_scope_vars)?);
+    result_vec.push(delete_out_of_scope_vars(&mut init_vars, upper_scope_vars, type_map, symbol_table)?);
     Ok(result_vec.join("\n") + "\n")
 }
 
@@ -177,24 +198,26 @@ fn generate_for_loop_init_instructions(
     statement: Rc<RefCell<Stmt>>,
     addedVars: &mut HashSet<String>,
     upper_scope_vars: &mut HashMap<String, Variable>,
-    stack_ptr: &mut i64
+    stack_ptr: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
     let statement_clone = statement.clone();
     let statement_borrow= statement_clone.borrow_mut();
     let statement_deref = statement_borrow.deref();
     match statement_deref {
         Stmt::VarDecl {name, var_type, expr, } => {
-            let mut instructions = allocate_int_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0)?;
+            let mut instructions = allocate_var_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0, type_map, symbol_table)?;
             let expr_unwrap = expr.clone().unwrap();
             let mut result_vec = Vec::new();
-            let expr_instructions = generate_expression_instructions(&expr_unwrap ,upper_scope_vars, &mut result_vec);
+            let expr_instructions = generate_expression_instructions(&expr_unwrap ,upper_scope_vars, &mut result_vec, type_map, symbol_table);
             instructions += &*result_vec.join("\n");
             addedVars.insert(name.clone());
             Ok(instructions)
         },
         Stmt::VarAssignment {name, expr } => {
             if expr.is_some() {
-                return Ok(store_int_on_stack(name, &expr.clone().unwrap(), upper_scope_vars)? + "\n")
+                return Ok(store_var_on_stack(name, &expr.clone().unwrap(), upper_scope_vars, type_map, symbol_table)? + "\n")
             }
             Ok("".to_string())
         },
@@ -205,11 +228,13 @@ fn generate_for_loop_init_instructions(
 fn delete_out_of_scope_vars(
     vars_to_delete: &HashSet<String>,
     scope_vars: &mut HashMap<String, Variable>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
     let mut stack_offset = 0;
     for var in vars_to_delete {
         let var_type = scope_vars.get(var).ok_or_else(|| format!("No for init var in scope vars: {}", var))?;
-        stack_offset += get_size(var_type);
+        stack_offset += get_size(&var_type.var_type, type_map, symbol_table)?;
         scope_vars.remove(var).unwrap();
     }
     Ok(format!("    add rsp, {stack_offset}"))
@@ -220,7 +245,9 @@ fn generate_while_instructions(
     body: &Rc<RefCell<Stmt>>,
     upper_scope_vars: &mut HashMap<String, Variable>,
     labels: &mut HashMap<String, i32>,
-    global_stack: &mut i64
+    global_stack: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
@@ -231,7 +258,7 @@ fn generate_while_instructions(
     labels.insert("while_end".to_string(), last_end + 1);
 
     result += &*format!("while_beg{}:\n", last_while);
-    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec)?;
+    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
     result += &*result_vec.join("\n");
     result += "\n";
     result += "    test al, al\n";
@@ -242,7 +269,7 @@ fn generate_while_instructions(
         Stmt::Block(vec) => vec,
         _ => return Err("Unexpected AST node during parsing while body".to_string())
     };
-    let body_instructions = gen_block_rec(body_vec, upper_scope_vars, labels, global_stack)?;
+    let body_instructions = gen_block_rec(body_vec, upper_scope_vars, labels, global_stack, type_map, symbol_table)?;
     result += &*body_instructions;
     result += "\n";
     result += &*format!("    jmp while_beg{}\n", last_while);
@@ -256,11 +283,13 @@ fn generate_if_else_instructions(
     else_branch: &Option<Rc<RefCell<Stmt>>>,
     upper_scope_vars: &mut HashMap<String, Variable>,
     labels: &mut HashMap<String, i32>,
-    global_stack: &mut i64
+    global_stack: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
-    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec)?;
+    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, type_map, symbol_table)?;
     result += &*result_vec.join("\n");
     result += "\n";
 
@@ -283,7 +312,7 @@ fn generate_if_else_instructions(
         _ => return Err(format!("Unexpected token {:?}, during generating code for if block", then_branch))
     };
     result += format!("if_label{}:\n", if_label_number).as_str();
-    let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels, global_stack)?;
+    let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels, global_stack, type_map, symbol_table)?;
     result += &*then_instructions;
     result += format!("\n    jmp end_label{}\n", end_label_number).as_str();;
 
@@ -291,10 +320,10 @@ fn generate_if_else_instructions(
         result += format!("else_label{}:\n", else_label_number).as_str();
         match &*else_branch_deref.borrow_mut() {
             Stmt::If { condition, then_branch, else_branch } => {
-                result += &*generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels, global_stack)?;
+                result += &*generate_if_else_instructions(condition, then_branch, else_branch, upper_scope_vars, labels, global_stack, type_map, symbol_table)?;
             }
             Stmt::Block(statements) => {
-                result += &*gen_block_rec(statements, upper_scope_vars, labels, global_stack)?;
+                result += &*gen_block_rec(statements, upper_scope_vars, labels, global_stack, type_map, symbol_table)?;
             }
             _ => return Err(format!("Unexpected statement in place of else branch: {:?}", else_branch))
         };
@@ -306,34 +335,42 @@ fn generate_if_else_instructions(
 fn generate_return_instructions(
     expression_root: &Expr,
     var_table: &mut HashMap<String, Variable>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<(String), String> {
     let mut instruction_vec = Vec::new();
-    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec)?;
+    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, type_map, symbol_table)?;
     Ok(instruction_vec.join("\n") + "\n")
 }
-fn allocate_int_on_stack(
+fn allocate_var_on_stack(
     var_name: &String,
-    var_type: &String,
+    var_type: &Type,
     var_table: &mut HashMap<String, Variable>,
     cur_stack_size: &mut i64,
-    local_stack_size: &mut i64
+    local_stack_size: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
-    var_table.insert(var_name.clone(), Variable {
-        var_type: Type::Integer,
-        memory_offset: *cur_stack_size + 8,
+    let var = Variable {
+        var_type: var_type.clone(),
+        memory_offset: *cur_stack_size + get_size(var_type, type_map, symbol_table)?,
         register: None,
         defined: false,
-    });
+        pointer: false,
+    };
+    var_table.insert(var_name.clone(), var);
     *local_stack_size += 8;
     *cur_stack_size += 8;
     let instruction = "    sub rsp, 8\n".to_string();
     Ok(instruction)
 }
 
-fn store_int_on_stack(
+fn store_var_on_stack(
     var_name: &String,
     expr: &Expr,
     var_table: &mut HashMap<String, Variable>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
 
     if !var_table.contains_key((var_name)) {
@@ -342,7 +379,7 @@ fn store_int_on_stack(
     let var = var_table.get(var_name).unwrap().clone();
 
     let mut instruction_vec = Vec::new();
-    let mem_offset = generate_expression_instructions(expr, var_table, &mut instruction_vec)?;
+    let mem_offset = generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
     Ok(instruction_vec.join("\n"))
 }
 ///
@@ -354,14 +391,16 @@ fn generate_expression_instructions(
     expression_root: &Expr,
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<(), String> {
     let current_node = expression_root;
     return match current_node {
         Expr::BinaryExpr(BinaryExpression{left, right, operator })=> {
-            Ok(generate_binary_institution(left, right, operator.clone(), var_table, result_vec)?)
+            Ok(generate_binary_institution(left, right, operator.clone(), var_table, result_vec, type_map, symbol_table)?)
         },
         Expr::UnaryExpr(UnaryExpr{ operator, operand }) => {
-            Ok(generate_unary_instructions(operand, operator.clone(), var_table, result_vec)?)
+            Ok(generate_unary_instructions(operand, operator.clone(), var_table, result_vec, type_map, symbol_table)?)
         },
         Expr::Const(Constant::Integer(value)) => {
             result_vec.push(format!("    mov r8, {}", *value));
@@ -391,9 +430,11 @@ fn generate_binary_institution(
     operator: Operator,
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<(), String> {
 
-    let right_offset= generate_expression_instructions(right, var_table, result_vec)?;
+    let right_offset= generate_expression_instructions(right, var_table, result_vec, type_map, symbol_table)?;
     let load_right = pop_into_reg_instruction(9);
 
     if  let Operator::Assign = operator {
@@ -412,7 +453,7 @@ fn generate_binary_institution(
         return Ok(())
     }
 
-    let left_offset = generate_expression_instructions(left, var_table, result_vec)?;
+    let left_offset = generate_expression_instructions(left, var_table, result_vec, type_map, symbol_table)?;
     let load_left = pop_into_reg_instruction(8);
     result_vec.push(load_left);
     result_vec.push(load_right);
@@ -441,8 +482,30 @@ fn generate_unary_instructions(
     operator: Operator,
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
 ) -> Result<(), String> {
-    let mem_offset = generate_expression_instructions(operand, var_table, result_vec)?;
+    match operator {
+        Operator::Deref => {
+            return handle_deref(operand, var_table, result_vec, type_map, symbol_table)
+        }
+        Operator::Ref => {
+            return if let Expr::VarUsage(var_name) = operand {
+                if var_table.get(var_name).is_none() {
+                    return Err("Trying to get ref to var which is not declared".to_string())
+                }
+                let var = var_table.get(var_name).unwrap();
+                let offset = var.memory_offset;
+                result_vec.push(format!("    lea r8, [rbp - {offset}]"));
+                result_vec.push(push_from_reg_on_stack(8));
+                Ok(())
+            } else {
+                Err("Operand of deref is not lvalue".to_string())
+            }
+        }
+        _ => {}
+    }
+    let mem_offset = generate_expression_instructions(operand, var_table, result_vec, type_map, symbol_table)?;
     let load_temp_res = pop_into_reg_instruction(8);
     result_vec.push(load_temp_res);
     let instruction = match operator {
@@ -462,7 +525,37 @@ fn generate_unary_instructions(
     Ok(())
 }
 
-enum StorageLocation {
+fn handle_deref(
+    operand: &Expr,
+    var_table: &mut HashMap<String, Variable>,
+    result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, StructDef>,
+) -> Result<(), String> {
+    match operand {
+        // Expr::BinaryExpr(expression) => {}
+        // Expr::UnaryExpr(expression) => {}
+        Expr::VarUsage(name) => {
+            let var = var_table.get(name);
+            if var.is_none() {
+                return Err(format!("No such var as: {name}"))
+            }
+            let var_unwrap = var.unwrap();
+            if let Type::Pointer(some) = &var_unwrap.var_type {
+                result_vec.push(format!("    mov r8, [rbp - {}]", var_unwrap.memory_offset));
+                result_vec.push("    mov r8, [r8]".to_string());
+                result_vec.push("    push r8".to_string())
+            } else {
+                return Err("Var used after deref is not pointer type".to_string())
+            }
+        }
+        Expr::Function_Call { .. } => {}
+        _ => return Err(format!("Invalid expression {:?} during dereference", operand).to_string())
+    }
+    Ok(())
+}
+
+enum _StorageLocation {
     // register number
     Register(i32),
     //memory offset
@@ -489,10 +582,15 @@ fn is_logical_operator(operator: &Operator) -> bool {
    }
 }
 
-fn get_size(var: &Variable) -> i64 {
-    match var.var_type {
-        Type::Integer => 8,
-        _ => 0,
+fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &HashMap<String, StructDef>) -> Result<i64, String> {
+    match cur_type {
+        Type::Primitive(name)=> match name.as_str() {
+            "int" => Ok(4),
+            _ => return Err(format!("No such type as: {name}")),
+        },
+        Type::Pointer(..) => Ok(8),
+        Type::Array(arr_type, size) => Ok(*size as i64),
+        _ => return Err(format!("Unknown type as {:?}", cur_type)),
     }
 }
 
