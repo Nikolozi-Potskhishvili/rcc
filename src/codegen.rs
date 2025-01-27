@@ -417,7 +417,9 @@ fn generate_expression_instructions(
             let size = get_size(&var.var_type, type_map, symbol_table)?;
 
             let instruction = get_type_instruction(size)?;
-            result_vec.push(format!("    mov r8, {instruction}[rbp - {}]", memory_offset));
+            let suffix = get_register_suffix(size)?;
+
+            result_vec.push(format!("    mov r8{suffix}, {instruction}[rbp - {}]", memory_offset));
             result_vec.push(push_from_reg_on_stack(8));
             Ok(())
         },
@@ -454,8 +456,9 @@ fn generate_binary_institution(
         let var_offset = var.memory_offset;
         let size = get_size(&var.var_type, type_map, symbol_table)?;
         let instruction = get_type_instruction(size)?;
+        let reg_suffix = get_register_suffix(size)?;
         result_vec.push(load_right);
-        result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9"));
+        result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9{reg_suffix}"));
         return Ok(())
     }
 
@@ -551,8 +554,9 @@ fn handle_deref(
             if let Type::Pointer(inner) = &var_unwrap.var_type {
                 let size = get_size(inner, type_map, symbol_table)?;
                 let size_instr = get_type_instruction(size)?;
+                let reg_suffix = get_register_suffix(size)?;
                 result_vec.push(format!("    mov r8, [rbp - {}]", var_unwrap.memory_offset));
-                result_vec.push(format!("    mov r8, {size_instr}[r8]"));
+                result_vec.push(format!("    mov r8{reg_suffix}, {size_instr}[r8]"));
                 result_vec.push("    push r8".to_string())
             } else {
                 return Err("Var used after deref is not pointer type".to_string())
@@ -625,5 +629,15 @@ fn get_type_instruction(size: i64 ) -> Result<String, String> {
         4 => "dword ",
         8 => "",
         _ => return Err(format!("size {size} is illigal"))
+    }.to_string())
+}
+
+fn get_register_suffix(size: i64) -> Result<String, String> {
+    Ok(match size {
+        1 => "b",
+        2 => "w",
+        4 => "d",
+        8 => "",
+        _ => return Err(format!("size {size} is illigal")),
     }.to_string())
 }
