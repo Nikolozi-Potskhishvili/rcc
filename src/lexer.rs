@@ -223,11 +223,10 @@ fn parse_long_token(s: &str) -> Option<Token> {
 fn get_type(string: &str) -> Result<Type, String> {
     match string {
         "int" => Ok(Type::Primitive("int".to_string())),
-        // "short" => Ok(Type::Short),
-        // "long" => Ok(Type::Long),
-        // "double" => Ok(Type::Double),
-        // "float" => Ok(Type::Float),
-        // "char" => Ok(Type::Char),
+        "short" => Ok(Type::Primitive("short".to_string())),
+        "long" => Ok(Type::Primitive("long".to_string())),
+        "char" => Ok(Type::Primitive("char".to_string())),
+        "bool" => Ok(Type::Primitive("bool".to_string())),
         _ => Err(format!("Unrecognized type: {string}")),
     }
 }
@@ -284,15 +283,16 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
 }
 
 
-fn get_keyword(token: &str) -> Result<Keyword, &'static str> {
+fn get_keyword(token: &str) -> Result<Keyword, String> {
      match token {
-         "int" => Ok(Keyword::Type(Type::Primitive("int".to_string()))),
+         "int" | "short" | "long" | "char" | "bool" =>
+             Ok(Keyword::Type(get_type(token.clone())?)),
          "for" => Ok(Keyword::For),
          "while" => Ok(Keyword::While),
          "if" => Ok(Keyword::If),
          "else" => Ok(Keyword::Else),
          "return" => Ok(Keyword::Return),
-        _ => Err("unexpected error during parsing keyword"),
+        _ => Err("unexpected error during parsing keyword".to_string()),
     }
 }
 

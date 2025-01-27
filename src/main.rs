@@ -190,4 +190,14 @@ mod tests {
         clean_up_tests_files();
         result.expect("failed");
     }
+
+    #[test]
+    fn test_different_primitives() {
+        let file_name = String::from("./test_files/different_types/short.c");
+        let expected_val = 100;
+
+        let result = test_helper(&file_name, expected_val);
+        clean_up_tests_files();
+        result.expect("failed");
+    }
 }

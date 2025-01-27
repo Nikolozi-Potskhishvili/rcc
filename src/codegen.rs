@@ -168,7 +168,7 @@ fn generate_for_loop_instructions(
     if condition.is_some() {
         let condition_some = condition.clone().unwrap();
         generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
-        result_vec.push(pop_into_reg_instruction(8));
+        //result_vec.push(pop_into_reg_instruction(8));
         result_vec.push("    test al, al".to_string());
         result_vec.push(format!("    jz for_end{last_end}"));
     }
@@ -299,7 +299,7 @@ fn generate_if_else_instructions(
     labels.insert("else_label".to_string(), else_label_number + 1);
     let end_label_number = labels.get("end_label").copied().unwrap_or(0);
     labels.insert("end_label".to_string(), end_label_number + 1);
-    result += &*pop_into_reg_instruction(8);
+    //result += &*pop_into_reg_instruction(8);
     result += format!("\n    cmp al, 1\n    je if_label{}\n", if_label_number).as_str();
     if else_branch.is_some() {
         result += format!("    jmp else_label{}\n", else_label_number).as_str();
@@ -351,17 +351,18 @@ fn allocate_var_on_stack(
     type_map: &HashMap<String, Type>,
     symbol_table: &HashMap<String, StructDef>,
 ) -> Result<String, String> {
+    let size = get_size(var_type, type_map, symbol_table)?;
     let var = Variable {
         var_type: var_type.clone(),
-        memory_offset: *cur_stack_size + get_size(var_type, type_map, symbol_table)?,
+        memory_offset: *cur_stack_size + size,
         register: None,
         defined: false,
         pointer: false,
     };
     var_table.insert(var_name.clone(), var);
-    *local_stack_size += 8;
-    *cur_stack_size += 8;
-    let instruction = "    sub rsp, 8\n".to_string();
+    *local_stack_size += size;
+    *cur_stack_size += size;
+    let instruction = format!("    sub rsp, {size}\n");
     Ok(instruction)
 }
 
@@ -377,7 +378,6 @@ fn store_var_on_stack(
         return Err(format!("Assigment without declaring a variable, {:?}", var_name))
     }
     let var = var_table.get(var_name).unwrap().clone();
-
     let mut instruction_vec = Vec::new();
     let mem_offset = generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
     Ok(instruction_vec.join("\n"))
@@ -408,12 +408,16 @@ fn generate_expression_instructions(
             Ok(())
         },
         Expr::VarUsage(var_name) => {
-            let memory_offset_op = var_table.get(var_name);
-            if memory_offset_op.is_none() {
+            let var_op = var_table.get(var_name);
+            if var_op.is_none() {
                 return Err(format!("Variable {}, was not defined", var_name))
             }
-            let memory_offset = memory_offset_op.unwrap().memory_offset;
-            result_vec.push(format!("    mov r8, [rbp - {}]", memory_offset));
+            let var = var_op.unwrap();
+            let memory_offset = var.memory_offset;
+            let size = get_size(&var.var_type, type_map, symbol_table)?;
+
+            let instruction = get_type_instruction(size)?;
+            result_vec.push(format!("    mov r8, {instruction}[rbp - {}]", memory_offset));
             result_vec.push(push_from_reg_on_stack(8));
             Ok(())
         },
@@ -448,8 +452,10 @@ fn generate_binary_institution(
         }
         let var = var_table.get(l_val).unwrap();
         let var_offset = var.memory_offset;
+        let size = get_size(&var.var_type, type_map, symbol_table)?;
+        let instruction = get_type_instruction(size)?;
         result_vec.push(load_right);
-        result_vec.push(format!("    mov [rbp - {var_offset}], r9"));
+        result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9"));
         return Ok(())
     }
 
@@ -469,6 +475,7 @@ fn generate_binary_institution(
             _ => return Err(format!("Unexpected operator: {:?}, during codgen of logical op", operator))
         };
         result_vec.push(comp_res.to_string());
+        return Ok(())
     } else {
         result_vec.push(format!("    {} r8, r9", instruction));
     }
@@ -541,9 +548,11 @@ fn handle_deref(
                 return Err(format!("No such var as: {name}"))
             }
             let var_unwrap = var.unwrap();
-            if let Type::Pointer(some) = &var_unwrap.var_type {
+            if let Type::Pointer(inner) = &var_unwrap.var_type {
+                let size = get_size(inner, type_map, symbol_table)?;
+                let size_instr = get_type_instruction(size)?;
                 result_vec.push(format!("    mov r8, [rbp - {}]", var_unwrap.memory_offset));
-                result_vec.push("    mov r8, [r8]".to_string());
+                result_vec.push(format!("    mov r8, {size_instr}[r8]"));
                 result_vec.push("    push r8".to_string())
             } else {
                 return Err("Var used after deref is not pointer type".to_string())
@@ -586,6 +595,10 @@ fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &Ha
     match cur_type {
         Type::Primitive(name)=> match name.as_str() {
             "int" => Ok(4),
+            "short" => Ok(2),
+            "long" => Ok(8),
+            "bool" => Ok(1),
+            "char" => Ok(1),
             _ => return Err(format!("No such type as: {name}")),
         },
         Type::Pointer(..) => Ok(8),
@@ -603,4 +616,14 @@ fn pop_into_reg_instruction(reg: i32) -> String {
 
 fn push_from_reg_on_stack(reg: i32) -> String {
     format!("    push r{reg}")
+}
+
+fn get_type_instruction(size: i64 ) -> Result<String, String> {
+    Ok(match size {
+        1 => "byte ",
+        2 => "word ",
+        4 => "dword ",
+        8 => "",
+        _ => return Err(format!("size {size} is illigal"))
+    }.to_string())
 }
