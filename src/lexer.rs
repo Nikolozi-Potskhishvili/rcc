@@ -7,13 +7,14 @@ use crate::lexer::FoundLongToken::{Found, NotFound};
 pub enum Token {
     Identifier(String),
     Keyword(Keyword),
-    Constant(Constant),
+    Constant(i64),
     Operator(Operator),
     SpecialCharacter(SpecialCharacter),
     Comments(String),
     Type(Type),
     EndOFFile,
 }
+
 
 impl Token {
     pub fn get_operator(&self) -> Option<Operator> {
@@ -25,29 +26,41 @@ impl Token {
         }
     }
 
-    pub fn get_constant(&self) -> Option<Constant> {
-        match self {
-            Token::Constant(constant) => {
-                Some(constant.clone())
-            }
-            _ => None,
-        }
-    }
+
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SymbolTableEntry {
+    Variable(Type),
+    StructDef(StructDef),
+    FunDef(FunDef),
+    TypeDef,
+}
+
 /// Primitive types. Currently, Are supported: Integer, Flout, Double, Char, Short, Long
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Primitive(String),
     Pointer(Box<Type>),
-    Array(Box<Type>, usize),
+    Array(Box<Type>, i64),
     Struct(String),
     Function,
+    Void,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StructDef {
     name: String,
     fields: Vec<(String, Type)>,
+    size: i64,
+}
+
+
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct  FunDef {
+    FunType: Type,
+    Args: Vec<(String, Type)>
 }
 
 ///
@@ -90,6 +103,7 @@ pub enum Operator {
     Ref,
     PrefixInc,
     PostfixInc,
+    ArrayAccess,
 }
 
 impl Operator {
@@ -214,7 +228,7 @@ fn parse_long_token(s: &str) -> Option<Token> {
     } else if let Ok(keyword) = get_keyword(s) {
          Some(Token::Keyword(keyword))
     } else if is_const_integer(s) {
-         Some(Token::Constant(Constant::Integer(s.parse::<i32>().unwrap())))
+         Some(Token::Constant(s.parse::<i64>().unwrap()))
     } else {
         Some(Token::Identifier(s.to_string()))
     }

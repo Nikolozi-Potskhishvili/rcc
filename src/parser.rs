@@ -1,28 +1,30 @@
-use std::any::Any;
 use std::cell::{ RefCell};
 use std::collections::HashMap;
 use std::fmt::{ Pointer};
 use std::iter::Peekable;
 use std::rc::Rc;
-use std::thread::current;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Stmt::{Block, For, If};
-use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, StructDef};
-use crate::lexer::Keyword::Return;
+use crate::ast_types::Expr::VarUsage;
+use crate::ast_types::Stmt::{Block, For};
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry};
 use crate::lexer::SpecialCharacter::LeftCurlyBracket;
 
 
 struct ExpressionParser {
     tokens: Vec<Token>,
     current_token: usize,
+    type_map: HashMap<String, Type>,
+    symbol_table: HashMap<String, SymbolTableEntry>
 }
 
 impl ExpressionParser {
-    fn new(tokens: Vec<Token>) -> Self {
+    fn new(tokens: Vec<Token>, type_map: HashMap<String, Type>, symbol_table: HashMap<String, SymbolTableEntry>) -> Self {
         ExpressionParser {
             tokens,
             current_token: 0,
+            type_map,
+            symbol_table,
         }
     }
 
@@ -224,7 +226,7 @@ impl ExpressionParser {
                 if let Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) = self.peek() {
                     panic!("function identifiers not supported yet!!!");
                 } else {
-                    Ok(Self::crate_variable_node(name_clone))
+                    Ok(self.crate_variable_node(name_clone)?)
                 }
             }
             Token::Constant(_) => {
@@ -253,7 +255,7 @@ impl ExpressionParser {
                     Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
                         return Err("function identifiers are not l value".to_string());
                     }
-                    _ => Ok(Self::crate_variable_node(name.clone())),
+                    _ => Ok(self.crate_variable_node(name.clone())?),
                 }
             }
             _ => Err(format!("token {:?} is not a correct l value", self.peek()))
@@ -286,13 +288,52 @@ impl ExpressionParser {
 
     fn create_constant_ast_node(constant: Token) -> Expr {
         return match constant {
-            Token::Constant(cnst) => Expr::Const(cnst),
+            Token::Constant(cnst) => Expr::Const(Constant::Long(cnst)),
             _ => panic!("{}", format!("Unexpected token during parsing of expression: {:?}", constant))
         }
     }
 
-    fn crate_variable_node(variable_name: String) -> Expr {
-        Expr::VarUsage(variable_name)
+    fn crate_variable_node(&mut self, variable_name: String) -> Result<Expr, String> {
+        let var = self.symbol_table.get(&variable_name).expect("No var declared");
+        match var {
+            SymbolTableEntry::Variable(cur_type) => {
+               match cur_type {
+                   Type::Primitive(_) => {
+                       Ok(Expr::VarUsage(variable_name))
+                   }
+                   Type::Pointer(_) => {
+                       Ok(Expr::VarUsage(variable_name))
+                   }
+                   Type::Array(inner, size) => {
+                       // expect dimensions n [const/var]
+                       let mut cur_expr = VarUsage(variable_name);
+                       while let (Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) = self.peek() {
+                           self.expect(Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket))?;
+                           let access_expression = self.parse_expression()?;
+                           cur_expr = Expr::BinaryExpr(BinaryExpression {
+                               operator: Operator::ArrayAccess,
+                               left: Box::new(cur_expr),
+                               right: Box::new(access_expression),
+                           });
+                           self.expect(Token::SpecialCharacter(SpecialCharacter::RightSquareBracket))?;
+                       }
+                       Ok(cur_expr)
+                   }
+                   // Type::Struct(_) => {
+                   //
+                   // }
+                   // Type::Function => {
+                   //
+                   // }
+                   _ => panic!("Unexpected type in expression")
+               }
+            }
+            // SymbolTableEntry::FunDef(..) => {
+            //
+            // }
+            _ => panic!("Unexpected type of idnetifier in expression")
+        }
+
     }
 }
 
@@ -307,12 +348,18 @@ impl ExpressionParser {
 // Unary         ::= ('~' | '!') Unary | Primary
 // Primary       ::= NUMBER | Var
 
-fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, String> {
+fn parse_expression(
+    tokens: &mut Peekable<IntoIter<Token>>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<Expr, String> {
     let mut extracted_tokens: Vec<Token> = Vec::new();
     let mut open_paren_count = 0;
     for token in tokens {
         match token {
-            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)=> {
+            Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
+                | Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket)
+            | Token::SpecialCharacter(SpecialCharacter::RightSquareBracket)=> {
                 extracted_tokens.push(token);
             },
             Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
@@ -331,7 +378,7 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
         }
     }
     println!("Extracted tokens: {:?}", extracted_tokens);
-    let mut expression_parser = ExpressionParser::new(extracted_tokens);
+    let mut expression_parser = ExpressionParser::new(extracted_tokens, type_map.clone(), symbol_table.clone());
     if let Ok(expression_root) = expression_parser.parse_expression() {
         return Ok(expression_root);
     };
@@ -343,7 +390,7 @@ fn parse_expression(tokens: &mut Peekable<IntoIter<Token>>) -> Result<Expr, Stri
 pub fn generate_ast_tree(
     tokens: Vec<Token>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
 ) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
     let mut token_iter = tokens.into_iter().peekable();
     let mut result = Vec::new();
@@ -389,7 +436,7 @@ pub fn generate_ast_tree(
 fn parse_scope_tokens(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Vec<Rc<RefCell<Stmt>>>, String> {
     let mut scope_statements: Vec<Rc<RefCell<Stmt>>> = Vec::new();
     // stack which tracks the latest scopes block variant reference
@@ -419,7 +466,7 @@ fn parse_scope_tokens(
             // Match return statement `return <int>;`
             Token::Keyword(Keyword::Return) => {
                 token_iter.next();
-                parse_return_statement(token_iter)?
+                parse_return_statement(token_iter, type_map, symbol_table)?
             },
             // Handle block end `}`
             Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket) => {
@@ -427,7 +474,7 @@ fn parse_scope_tokens(
                 return Ok(scope_statements);
             },
             Token::Identifier(identifier) => {
-                handle_identifier_usage(token_iter, &identifier)?
+                handle_identifier_usage(token_iter, &identifier, type_map, symbol_table)?
             },
             Token::Keyword(Keyword::While) => {
                 token_iter.next();
@@ -451,7 +498,7 @@ fn parse_scope_tokens(
 fn handle_for_keyword(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     //Expect open parenthesis
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
@@ -460,7 +507,7 @@ fn handle_for_keyword(
     let init_root = match token_iter.peek().cloned() {
         Some(Token::Identifier(identifier)) => {
             // Handle identifier usage (e.g., assignment to an already declared variable)
-            Some(handle_identifier_usage(token_iter, &identifier)?)
+            Some(handle_identifier_usage(token_iter, &identifier, type_map, symbol_table)?)
         }
         Some(Token::SpecialCharacter(SpecialCharacter::SemiColon)) => {
             // No initialization, just a semicolon
@@ -499,7 +546,7 @@ fn handle_for_keyword(
     if is_semicolon {
         condition_root = None
     } else {
-        condition_root = Some(parse_expression(token_iter)?);
+        condition_root = Some(parse_expression(token_iter, type_map, symbol_table)?);
     }
 
     // parse tokens after second semicolon and right parenthesis(increment)
@@ -513,7 +560,7 @@ fn handle_for_keyword(
     if is_semicolon {
         increment_root = None
     } else {
-        increment_root = Some(parse_expression(token_iter)?);
+        increment_root = Some(parse_expression(token_iter, type_map, symbol_table)?);
     }
     // parse loop body, if exists
     let body_option : Option<Rc<RefCell<Stmt>>> = match token_iter.next() {
@@ -543,11 +590,11 @@ fn handle_for_keyword(
 fn handle_while_keyword(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     //consume while keyword
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
-    let expression_root = parse_expression(token_iter)?;
+    let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
     expect_token(token_iter, Token::SpecialCharacter(LeftCurlyBracket))?;
     let cycle_body = parse_scope_tokens(token_iter, type_map, symbol_table)?;
     let body_block = Rc::new(RefCell::new(Block(cycle_body)));
@@ -564,7 +611,7 @@ fn handle_while_keyword(
 fn parse_else_keyword(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     match token_iter.peek().ok_or_else(|| "No token after parsing else keyword")? {
         Token::Keyword(Keyword::If) => {
@@ -592,11 +639,11 @@ fn parse_else_keyword(
 fn parse_conditional(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     println!("Parsing conditional");
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
-    let bool_expression_root = parse_expression(token_iter)?;
+    let bool_expression_root = parse_expression(token_iter, type_map, symbol_table)?;
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
     let statements = parse_scope_tokens(token_iter, type_map, symbol_table)?;
     let else_branch = match token_iter.peek() {
@@ -625,7 +672,9 @@ fn parse_conditional(
 
 fn handle_identifier_usage(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    name: &String
+    name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     let mut iter_clone = token_iter.clone();
     //consume identifier and peek token after
@@ -633,7 +682,7 @@ fn handle_identifier_usage(
     match iter_clone.peek() {
         // var assignment
        Some(Token::Operator(Operator::Assign)) => {
-           let expression_root = parse_expression(token_iter)?;
+           let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
            let var_node = Rc::new(RefCell::new(Stmt::VarAssignment {
                name: name.to_string(),
                expr: Some(expression_root),
@@ -644,7 +693,7 @@ fn handle_identifier_usage(
 
            Err("Function call not supported yet".to_string())
        },
-        _ => Err("Invalid symbol after identifier".to_string()),
+        _ => Err(format!("Invalid symbol after identifier {:?}", token_iter.peek())),
     }
 
 }
@@ -655,7 +704,7 @@ fn handle_identifier_usage(
 fn parse_type_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
     cur_type: &mut Type
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     if let Some(Token::Identifier(name)) = token_iter.peek().cloned() {
@@ -677,7 +726,13 @@ fn parse_type_declaration(
                 _ => Err(format!("Unexpected special character after {:?}, integer declaration", character))
             }
         } else if let Some(Token::Operator(Operator::Assign)) = after_identifier {
-            return parse_variable_declaration(token_iter, &name, type_map, symbol_table, cur_type)
+            return parse_variable_declaration(
+                token_iter,
+                &name,
+                type_map,
+                symbol_table,
+                cur_type
+            )
         }
     }
     Err(format!("Unexpected token while parsing integer declaration: {:?}", token_iter.peek()))
@@ -687,7 +742,7 @@ fn parse_function_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
     name: &String,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
     cur_type: &mut Type
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     // Expect parentheses `()` and '{'
@@ -721,10 +776,17 @@ fn parse_variable_declaration(
     token_iter: &mut Peekable<IntoIter<Token>>,
     var_name: &String,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
     cur_type: &mut Type
 ) -> Result<Rc<RefCell<Stmt>>, String> {
-    let expression = parse_expression(token_iter)?;
+    // check for array decl
+    let mut clone_iter = token_iter.clone();
+    clone_iter.next();
+    if let Some(Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket)) = clone_iter.peek().cloned() {
+        return parse_array_declaration(token_iter, var_name, type_map, symbol_table, cur_type);
+    }
+    symbol_table.insert(var_name.clone(), SymbolTableEntry::Variable(cur_type.clone()));
+    let expression = parse_expression(token_iter, type_map, symbol_table)?;
     Ok(Rc::new(RefCell::new(Stmt::VarDecl {
         name: var_name.to_string(),
         var_type: cur_type.clone(),
@@ -732,8 +794,99 @@ fn parse_variable_declaration(
     })))
 }
 
-fn parse_return_statement(token_iter: &mut Peekable<IntoIter<Token>>) -> Result<Rc<RefCell<Stmt>>, String> {
-    let expression_root = parse_expression(token_iter)?;
+fn parse_array_declaration(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    var_name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    arr_type: &mut Type
+) -> Result<Rc<RefCell<Stmt>>, String> {
+    //consume identifier
+    token_iter.next();
+    let mut cur_arr_type = arr_type.clone();
+    while !matches!(token_iter.peek(), Some(Token::Operator(Operator::Assign)) | Some(Token::SpecialCharacter(SpecialCharacter::SemiColon))) {
+        //parse square bracket
+        let nex_token = token_iter.next();
+        if let Some(Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket)) = nex_token {
+            match token_iter.next().unwrap() {
+                Token::Identifier(name) => {
+                    let var_op = symbol_table.get(&name);
+                    if var_op.is_none() {
+                        return Err(format!("No variable {name} is defined in array declaration {var_name}"))
+                    }
+                    return Err("Variable type arrays are not supported".to_string())
+                }
+                Token::Constant(constant) => {
+                    let cur_type = Type::Array(Box::from(cur_arr_type.clone()), constant);
+                    cur_arr_type = cur_type;
+                }
+                Token::SpecialCharacter(SpecialCharacter::RightSquareBracket) => {
+                    let cur_type = Type::Array(Box::from(cur_arr_type.clone()), -1);
+                    cur_arr_type = cur_type;
+                }
+                _ => return Err(format!("Invalid token after [ in arry declaration: {:?}", token_iter.peek().cloned()))
+            }
+        } else {
+            break;
+        }
+    }
+    match token_iter.peek().unwrap() {
+        Token::Operator(Operator::Assign) => {
+            //either all length given or none
+            token_iter.next();
+            let mut tem_type = &cur_arr_type;
+            let mut dimensions = Vec::new();
+            while let Type::Array(nested, size) = tem_type {
+                dimensions.push(*size);
+                tem_type = nested;
+            }
+            let all_filled = dimensions.iter().all(|&size| size != -1);
+
+            if !all_filled {
+                return Err("Mixed array dimensions: some are filled, others are incomplete.".to_string());
+            }
+
+            parse_array_decl_expression(token_iter, var_name, type_map, symbol_table, arr_type, &dimensions)
+        }
+        Token::SpecialCharacter(SpecialCharacter::SemiColon) => {
+            token_iter.next();
+            // every level should be defined
+            let mut temp_type = &cur_arr_type;
+            while let Type::Array(nested, size) = temp_type {
+               if(*size == -1) {
+                   return Err("Incomplete array dimension specification".to_string());
+               }
+                temp_type = nested;
+            }
+            symbol_table.insert(var_name.clone(), SymbolTableEntry::Variable(cur_arr_type.clone()));
+            Ok(Rc::new(RefCell::new(Stmt::VarDecl {
+                name: var_name.clone(),
+                var_type: cur_arr_type,
+                expr: None,
+            })))
+        }
+        _ => return Err(format!("Illegal token after array [] during declaration : {:?}", token_iter.peek()))
+    }
+}
+
+fn parse_array_decl_expression(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    var_name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    cur_type: &mut Type,
+    dimensions: &Vec<i64>
+) -> Result<Rc<RefCell<Stmt>>, String> {
+
+    todo!()
+}
+
+fn parse_return_statement(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<Rc<RefCell<Stmt>>, String> {
+    let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
     let return_node = Rc::new(RefCell::new(Stmt::Return(Some(expression_root))));
     Ok(return_node)
 }
@@ -763,8 +916,24 @@ fn expect_token(
     }
 }
 
+
 pub fn print_ast(root_nodes: &Vec<Rc<RefCell<Stmt>>>) {
     for node in root_nodes {
         println!("{:?}", node);
     }
+}
+
+fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
+    let mut tem_type = array_type;
+    let mut res = Vec::new();
+    while let Type::Array(inner, size) = tem_type {
+        res.push(*size);
+        tem_type = inner;
+    }
+
+    res
+}
+
+fn get_array_total_size(array_type: &Type) -> i64 {
+    0
 }

@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::ops::{Deref};
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::lexer::{Constant, Operator, StructDef, Type};
+use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
 #[derive(Clone, Debug, PartialEq)]
 struct Variable {
     var_type: Type,
@@ -30,7 +30,7 @@ enum Scope {
 pub fn generate_assembly(
     ast_root_nodes: &Vec<Rc<RefCell<Stmt>>>,
     type_map: &mut HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut global_vars = HashMap::new();
@@ -72,7 +72,7 @@ fn gen_block_rec(
     labels: &mut HashMap<String, i32>,
     stack_ptr: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut local_stack = 0;
@@ -145,7 +145,7 @@ fn generate_for_loop_instructions(
     labels: &mut HashMap<String, i32>,
     stack_ptr: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
 
     let last_for = labels.get("for_beg").copied().unwrap_or(0);
@@ -200,7 +200,7 @@ fn generate_for_loop_init_instructions(
     upper_scope_vars: &mut HashMap<String, Variable>,
     stack_ptr: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let statement_clone = statement.clone();
     let statement_borrow= statement_clone.borrow_mut();
@@ -229,7 +229,7 @@ fn delete_out_of_scope_vars(
     vars_to_delete: &HashSet<String>,
     scope_vars: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut stack_offset = 0;
     for var in vars_to_delete {
@@ -247,7 +247,7 @@ fn generate_while_instructions(
     labels: &mut HashMap<String, i32>,
     global_stack: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
@@ -285,7 +285,7 @@ fn generate_if_else_instructions(
     labels: &mut HashMap<String, i32>,
     global_stack: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
@@ -336,7 +336,7 @@ fn generate_return_instructions(
     expression_root: &Expr,
     var_table: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<(String), String> {
     let mut instruction_vec = Vec::new();
     let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, type_map, symbol_table)?;
@@ -349,7 +349,7 @@ fn allocate_var_on_stack(
     cur_stack_size: &mut i64,
     local_stack_size: &mut i64,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let size = get_size(var_type, type_map, symbol_table)?;
     let var = Variable {
@@ -371,7 +371,7 @@ fn store_var_on_stack(
     expr: &Expr,
     var_table: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
 
     if !var_table.contains_key((var_name)) {
@@ -392,7 +392,7 @@ fn generate_expression_instructions(
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<(), String> {
     let current_node = expression_root;
     return match current_node {
@@ -402,7 +402,7 @@ fn generate_expression_instructions(
         Expr::UnaryExpr(UnaryExpr{ operator, operand }) => {
             Ok(generate_unary_instructions(operand, operator.clone(), var_table, result_vec, type_map, symbol_table)?)
         },
-        Expr::Const(Constant::Integer(value)) => {
+        Expr::Const(Constant::Long(value)) => {
             result_vec.push(format!("    mov r8, {}", *value));
             result_vec.push(push_from_reg_on_stack(8));
             Ok(())
@@ -437,7 +437,7 @@ fn generate_binary_institution(
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<(), String> {
 
     let right_offset= generate_expression_instructions(right, var_table, result_vec, type_map, symbol_table)?;
@@ -493,7 +493,7 @@ fn generate_unary_instructions(
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<(), String> {
     match operator {
         Operator::Deref => {
@@ -540,7 +540,7 @@ fn handle_deref(
     var_table: &mut HashMap<String, Variable>,
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
-    symbol_table: &HashMap<String, StructDef>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<(), String> {
     match operand {
         // Expr::BinaryExpr(expression) => {}
@@ -595,7 +595,7 @@ fn is_logical_operator(operator: &Operator) -> bool {
    }
 }
 
-fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &HashMap<String, StructDef>) -> Result<i64, String> {
+fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     match cur_type {
         Type::Primitive(name)=> match name.as_str() {
             "int" => Ok(4),
@@ -606,7 +606,7 @@ fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &Ha
             _ => return Err(format!("No such type as: {name}")),
         },
         Type::Pointer(..) => Ok(8),
-        Type::Array(arr_type, size) => Ok(*size as i64),
+        Type::Array(arr_type, size) => Ok(*size),
         _ => return Err(format!("Unknown type as {:?}", cur_type)),
     }
 }

@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::process::{Command, ExitStatus};
 use crate::codegen::generate_assembly;
-use crate::lexer::{Lexer, Type};
+use crate::lexer::{Lexer, SymbolTableEntry, Type};
 use crate::parser::{generate_ast_tree, print_ast};
 
 mod lexer;
@@ -31,7 +31,7 @@ fn get_source_code(file_name: &String) -> String {
 fn compile_source_code(source_code: String) -> ExitStatus {
     let tokens = Lexer::tokenize(&source_code);
     let mut type_map = init_type_map();
-    let mut symbol_table = HashMap::new();
+    let mut symbol_table: HashMap<String, SymbolTableEntry> = HashMap::new();
     let mut ast_tree = generate_ast_tree(tokens, &mut type_map, &mut symbol_table).expect("Problem creating AST tree");
     print_ast(&ast_tree);
     let code = generate_assembly(&ast_tree, &mut type_map, &mut symbol_table).expect("expected no errors in codegen");
@@ -199,5 +199,15 @@ mod tests {
         let result = test_helper(&file_name, expected_val);
         clean_up_tests_files();
         result.expect("failed");
+    }
+
+    #[test]
+    fn test_arrays() {
+        let file_name = String::from("./test_files/arrays/array_init_access.c");
+        let expected_value = 6;
+
+        let result = test_helper(&file_name, expected_value);
+        clean_up_tests_files();
+        result.expect("failed")
     }
 }
