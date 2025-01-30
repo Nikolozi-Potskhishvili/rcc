@@ -1,11 +1,12 @@
 use std::cell::{ RefCell};
 use std::collections::HashMap;
-use std::fmt::{ Pointer};
+use std::f32::consts::E;
+use std::fmt::{format, Pointer};
 use std::iter::Peekable;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Expr::VarUsage;
+use crate::ast_types::Expr::ArrayAccess;
 use crate::ast_types::Stmt::{Block, For};
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry};
 use crate::lexer::SpecialCharacter::LeftCurlyBracket;
@@ -57,12 +58,6 @@ impl ExpressionParser {
             Err(format!("Expected {:?}, got {:?}", expected, self.peek()))
         }
     }
-
-    // fn contains_assignment(&self) -> Result<bool, String> {
-    //    let contains = false;
-    //     for token in self.tokens { }
-    //     return false;
-    // }
 
     fn parse_expression(&mut self) -> Result<Expr, String> {
         self.parse_assignment()
@@ -196,7 +191,9 @@ impl ExpressionParser {
         println!("{:?} during parsing unary", self.peek());
         match self.peek() {
             Token::Constant(_) | Token::SpecialCharacter(_) | Token::Identifier(_) => {
-                Ok(self.parse_primary()?)
+                let mut primary = self.parse_primary()?;
+                self.parse_postfix(primary)
+
             }
             Token::Operator(Operator::Tilde) | Token::Operator(Operator::Not)
             | Token::Operator(Operator::Minus) | Token::Operator(Operator::Ref) => {
@@ -214,6 +211,26 @@ impl ExpressionParser {
             },
             _ => Err(String::from("illegal token"))
         }
+    }
+
+    fn parse_postfix (&mut self, mut expr: Expr) -> Result<Expr, String> {
+        println!("Parsing postfix: {:?}", self.peek());
+        loop {
+            match self.peek() {
+                Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket) => {
+                    let operator = Token::Operator(Operator::ArrayAccess);
+                    self.consume();
+                    let index_expression = self.parse_expression()?;
+                    if self.consume() != Token::SpecialCharacter(SpecialCharacter::RightSquareBracket) {
+                        return Err(String::from("Expected closing ']'"));
+                    }
+                    expr = ArrayAccess(Box::from(expr), Box::from(index_expression));
+                },
+                _ => break,
+            }
+        }
+
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
@@ -245,25 +262,10 @@ impl ExpressionParser {
             _ => Err(format!("unexpected token {:?}", self.peek())),
         }
     }
-    fn parse_l_value(&mut self) -> Result<Expr, String> {
-        println!("Parsing l value:{:?}", self.peek());
-        let peeked_token = self.peek().clone();
-        match peeked_token {
-            Token::Identifier(name) => {
-                self.consume();
-                match self.peek() {
-                    Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
-                        return Err("function identifiers are not l value".to_string());
-                    }
-                    _ => Ok(self.crate_variable_node(name.clone())?),
-                }
-            }
-            _ => Err(format!("token {:?} is not a correct l value", self.peek()))
-        }
-    }
+
 
     fn is_l_value(expression: &Expr) -> bool {
-        if let Expr::VarUsage(var) = expression {
+        if matches!(expression, Expr::VarUsage(_) | Expr::ArrayAccess(_, _)) {
              return true
         }
         false
@@ -297,36 +299,7 @@ impl ExpressionParser {
         let var = self.symbol_table.get(&variable_name).expect("No var declared");
         match var {
             SymbolTableEntry::Variable(cur_type) => {
-               match cur_type {
-                   Type::Primitive(_) => {
-                       Ok(Expr::VarUsage(variable_name))
-                   }
-                   Type::Pointer(_) => {
-                       Ok(Expr::VarUsage(variable_name))
-                   }
-                   Type::Array(inner, size) => {
-                       // expect dimensions n [const/var]
-                       let mut cur_expr = VarUsage(variable_name);
-                       while let (Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) = self.peek() {
-                           self.expect(Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket))?;
-                           let access_expression = self.parse_expression()?;
-                           cur_expr = Expr::BinaryExpr(BinaryExpression {
-                               operator: Operator::ArrayAccess,
-                               left: Box::new(cur_expr),
-                               right: Box::new(access_expression),
-                           });
-                           self.expect(Token::SpecialCharacter(SpecialCharacter::RightSquareBracket))?;
-                       }
-                       Ok(cur_expr)
-                   }
-                   // Type::Struct(_) => {
-                   //
-                   // }
-                   // Type::Function => {
-                   //
-                   // }
-                   _ => panic!("Unexpected type in expression")
-               }
+                Ok(Expr::VarUsage(variable_name))
             }
             // SymbolTableEntry::FunDef(..) => {
             //
@@ -345,7 +318,8 @@ impl ExpressionParser {
 //Relational       ::= Additive ( ('<' | '>' | '<=' | '>=') Additive )*
 //Additive      ::= Multiplicative ( '+' | '-' Multiplicative )*
 //Multiplicative ::= Unary ( ('*' | '/') Unary )*
-// Unary         ::= ('~' | '!') Unary | Primary
+// Unary(Prefix)         ::= ('~' | '!') Unary | Primary
+// Postfix       ::= Primary ( '++' | '--' | '[' Expression ']')*
 // Primary       ::= NUMBER | Var
 
 fn parse_expression(
@@ -676,28 +650,71 @@ fn handle_identifier_usage(
     type_map: &mut HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
+    let entry_option = symbol_table.get(name);
+    if entry_option.is_none() {
+        return Err(format!("Invalid identifier:{name} during parsing"))
+    }
+    let entry = entry_option.unwrap();
+    match entry {
+        SymbolTableEntry::Variable(Type) => {
+            match Type {
+                Type::Primitive(_) | Type::Pointer(_) => parse_primitive_identifier(token_iter, name, type_map, symbol_table),
+                Type::Array(inner, size) => parse_array_identifier(token_iter, name, type_map, symbol_table, inner.clone(), *size),
+                // Type::Struct(_) => {}
+                // Type::Function => {}
+                Type::Void => return Err("Invalid use of keyword void".to_string()),
+                _ => Err("dff".to_string()),
+            }
+        }
+        _ => return Err(format!("Invalid type of identifier:{:?} during parsing", entry)),
+    }
+
+
+}
+
+fn parse_array_identifier(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    inner_type: Box<Type>,
+    dimension: i64,
+) -> Result<Rc<RefCell<Stmt>>, String> {
+    let cur_dimensions = 0;
+    // parse identifier;
+    let expression = parse_expression(token_iter, type_map, symbol_table)?;
+    Ok(Rc::new(RefCell::new(Stmt::VarAssignment {
+        name: name.clone(),
+        expr: Some(expression),
+    })))
+}
+
+fn parse_primitive_identifier(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+) -> Result<Rc<RefCell<Stmt>>, String> {
     let mut iter_clone = token_iter.clone();
     //consume identifier and peek token after
     iter_clone.next();
     match iter_clone.peek() {
         // var assignment
-       Some(Token::Operator(Operator::Assign)) => {
-           let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
-           let var_node = Rc::new(RefCell::new(Stmt::VarAssignment {
-               name: name.to_string(),
-               expr: Some(expression_root),
-           }));
-           Ok(var_node)
-       },
-       Some(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) => {
+        Some(Token::Operator(Operator::Assign)) => {
+            let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
+            let var_node = Rc::new(RefCell::new(Stmt::VarAssignment {
+                name: name.to_string(),
+                expr: Some(expression_root),
+            }));
+            Ok(var_node)
+        },
+        Some(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) => {
 
-           Err("Function call not supported yet".to_string())
-       },
+            Err("Function call not supported yet".to_string())
+        },
         _ => Err(format!("Invalid symbol after identifier {:?}", token_iter.peek())),
     }
-
 }
-
 /// Parses integer keyword at global scope, returns VarDec Node or FuncDec Node,
 /// All the scopes inside are parsed recursively
 ///
@@ -919,20 +936,10 @@ fn expect_token(
 
 pub fn print_ast(root_nodes: &Vec<Rc<RefCell<Stmt>>>) {
     for node in root_nodes {
-        println!("{:?}", node);
+        println!("{:?}\n", node);
     }
 }
 
-fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
-    let mut tem_type = array_type;
-    let mut res = Vec::new();
-    while let Type::Array(inner, size) = tem_type {
-        res.push(*size);
-        tem_type = inner;
-    }
-
-    res
-}
 
 fn get_array_total_size(array_type: &Type) -> i64 {
     0

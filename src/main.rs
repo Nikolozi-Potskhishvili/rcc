@@ -61,6 +61,7 @@ fn init_type_map() -> HashMap<String, Type> {
 #[cfg(test)]
 mod tests {
     use std::{fs, panic};
+    use std::ops::Index;
     use std::process::Command;
     use crate::{compile_source_code, get_source_code};
 
@@ -203,11 +204,13 @@ mod tests {
 
     #[test]
     fn test_arrays() {
-        let file_name = String::from("./test_files/arrays/array_init_access.c");
-        let expected_value = 6;
-
-        let result = test_helper(&file_name, expected_value);
-        clean_up_tests_files();
-        result.expect("failed")
+        let files = vec![String::from("./test_files/arrays/simples_array.c"),
+                             String::from("./test_files/arrays/array_for_loop.c")];
+        let expected_values = vec![6, 6];
+        for (index, file) in files.iter().enumerate(){
+            let result = test_helper(file, *expected_values.get(index).unwrap());
+            clean_up_tests_files();
+            result.expect("failed")
+        }
     }
 }

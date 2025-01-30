@@ -1,11 +1,14 @@
 use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
+use std::env::var;
 use std::fmt::format;
+use std::fs::FileType;
 use std::hash::Hash;
 use std::ops::{Deref};
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
+
 #[derive(Clone, Debug, PartialEq)]
 struct Variable {
     var_type: Type,
@@ -351,6 +354,7 @@ fn allocate_var_on_stack(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
+
     let size = get_size(var_type, type_map, symbol_table)?;
     let var = Variable {
         var_type: var_type.clone(),
@@ -379,8 +383,8 @@ fn store_var_on_stack(
     }
     let var = var_table.get(var_name).unwrap().clone();
     let mut instruction_vec = Vec::new();
-    let mem_offset = generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
-    Ok(instruction_vec.join("\n"))
+    generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
+    Ok(instruction_vec.join("\n") + "\n")
 }
 ///
 ///  Binary operations use R8 for storing result of left side of expression and R9 for right side
@@ -423,7 +427,84 @@ fn generate_expression_instructions(
             result_vec.push(push_from_reg_on_stack(8));
             Ok(())
         },
+        Expr::ArrayAccess(inner, ident) => {
+            //generate ident instructions
+            let name = get_array_name_from_access_expr(&current_node.clone())?;
+            let var = var_table.get(&name).unwrap();
+            let depth = get_array_dimensions(&var.var_type).len();
+            let underlying_size = get_array_underlying_size(&var.var_type, type_map, symbol_table)?;
+            generate_array_access_instructions(current_node, &mut 0, depth as i64, underlying_size, var_table, result_vec, type_map, symbol_table)?;
+            result_vec.push(pop_into_reg_instruction(8));
+            result_vec.push(format!("    mov r9,{underlying_size}[r8]"));
+            result_vec.push(push_from_reg_on_stack(9));
+            Ok(())
+        }
         _ => Err("Invalid node type during expression codgen".to_string())
+    }
+}
+
+fn get_array_name_from_access_expr(expression: &Expr) -> Result<String, String> {
+    let mut temp_node = expression;
+    while let Expr::ArrayAccess(inner, _) = temp_node {
+        temp_node = inner;
+    }
+    match temp_node {
+        Expr::VarUsage(name) => Ok(String::from(name)),
+        _ => return Err("".to_string())
+    }
+}
+
+fn generate_array_access_instructions(
+    expression: &Expr,
+    cur_depth: &mut i64,
+    depth: i64,
+    underlying_size: i64,
+    var_table: &mut HashMap<String, Variable>,
+    result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+) -> Result<(), String> {
+    match expression {
+        // Base case: The array variable itself
+        Expr::VarUsage(name) => {
+            let var_op = var_table.get(name);
+            if var_op.is_none() {
+                return Err(format!("Array with identifier {name} is not declared"));
+            }
+            let var = var_op.unwrap();
+            let base_offset = var.memory_offset;
+
+            // Load the base address of the array
+            result_vec.push(format!("    lea r8, [rbp - {}]", base_offset));
+            result_vec.push(push_from_reg_on_stack(8));
+            Ok(())
+        }
+        // Recursive case: Array access
+        Expr::ArrayAccess(inner, indexing) => {
+            *cur_depth += 1;
+            generate_array_access_instructions(inner, cur_depth, depth, underlying_size,var_table, result_vec, type_map, symbol_table)?;
+
+            // Process the indexing expression (calculate index value)
+            generate_expression_instructions(indexing, var_table, result_vec, type_map, symbol_table)?;
+
+            let mut elem_size = 0;
+            // Get the type of the inner array
+            if(*cur_depth == depth) {
+                //elem_size = get_array_underlying_size()?;
+                elem_size = underlying_size;
+            } else {
+                elem_size = 8;
+            }
+
+            result_vec.push(pop_into_reg_instruction(9)); // Pop index into r9
+            result_vec.push(format!("    imul r9, {}", elem_size)); // Scale index by element size
+            result_vec.push(pop_into_reg_instruction(8)); // Pop base address into r8
+            result_vec.push("    add r8, r9".to_string()); // Compute final address
+            result_vec.push(push_from_reg_on_stack(8));
+
+            return Ok(())
+        }
+        _ => return Err(format!("Invalid expression in array access: {:?}", expression)),
     }
 }
 
@@ -445,21 +526,38 @@ fn generate_binary_institution(
 
     if  let Operator::Assign = operator {
         // expect l value on left
-        let l_val = match left {
-            Expr::VarUsage(name) => name,
+        match left {
+            Expr::VarUsage(name) => {
+                if !var_table.contains_key(name) {
+                    return Err(format!("No declared var as:{name}").to_string())
+                }
+                let var = var_table.get(name).unwrap();
+                let var_offset = var.memory_offset;
+                let size = get_size(&var.var_type, type_map, symbol_table)?;
+                let instruction = get_type_instruction(size)?;
+                let reg_suffix = get_register_suffix(size)?;
+                result_vec.push(load_right);
+                result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9{reg_suffix}"));
+                return Ok(())
+            },
+            Expr::ArrayAccess(var_expr, indexing_expr) => {
+                let name = get_array_name_from_access_expr(&left.clone())?;
+                let var = var_table.get(&name).unwrap();
+                let depth = get_array_dimensions(&var.var_type).len();
+                let underlying_size = get_array_underlying_size(&var.var_type, type_map, symbol_table)?;
+                generate_array_access_instructions(left, &mut 0, depth as i64, underlying_size, var_table, result_vec, type_map, symbol_table)?;
+                result_vec.push(pop_into_reg_instruction(8)); // load adress into r8
+
+                let size = underlying_size;
+                let instruction = get_type_instruction(size)?;
+                let reg_suffix = get_register_suffix(size)?;
+
+                result_vec.push(load_right);
+                result_vec.push(format!("    mov {instruction}[r8], r9{}", reg_suffix));
+                return Ok(())
+            },
             _ => return Err("No l value before assignment operator".to_string())
-            };
-        if !var_table.contains_key(l_val) {
-            return Err(format!("No declared var as:{l_val}").to_string())
-        }
-        let var = var_table.get(l_val).unwrap();
-        let var_offset = var.memory_offset;
-        let size = get_size(&var.var_type, type_map, symbol_table)?;
-        let instruction = get_type_instruction(size)?;
-        let reg_suffix = get_register_suffix(size)?;
-        result_vec.push(load_right);
-        result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9{reg_suffix}"));
-        return Ok(())
+        };
     }
 
     let left_offset = generate_expression_instructions(left, var_table, result_vec, type_map, symbol_table)?;
@@ -606,7 +704,9 @@ fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mu
             _ => return Err(format!("No such type as: {name}")),
         },
         Type::Pointer(..) => Ok(8),
-        Type::Array(arr_type, size) => Ok(*size),
+        Type::Array(arr_type, size) => {
+            get_array_size(cur_type, type_map, symbol_table)
+        },
         _ => return Err(format!("Unknown type as {:?}", cur_type)),
     }
 }
@@ -640,4 +740,83 @@ fn get_register_suffix(size: i64) -> Result<String, String> {
         8 => "",
         _ => return Err(format!("size {size} is illigal")),
     }.to_string())
+}
+fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
+    let mut tem_type = array_type;
+    let mut res = Vec::new();
+    while let Type::Array(inner, size) = tem_type {
+        res.push(*size);
+        tem_type = inner;
+    }
+
+    res
+}
+
+fn get_array_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
+    let mut accum = 0;
+    let mut temp = array;
+    while let Type::Array(inner, size) = temp {
+        if accum == 0 {
+            accum = *size;
+        } else {
+            accum *= size;
+        }
+
+        temp = inner
+    }
+    match temp {
+        Type::Primitive(_) | Type::Struct(_) => accum *= get_size(temp, type_map, symbol_table)?,
+        Type::Pointer(ptr) => accum *= 8,
+        _ => panic!("Illegal type inside array:{:?}", temp)
+    }
+    Ok(accum)
+}
+
+fn get_array_underlying_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
+    let mut temp = array;
+    while let Type::Array(inner, size) = temp {
+        temp = inner
+    }
+    match temp {
+        Type::Primitive(_) | Type::Struct(_) => Ok(get_size(temp, type_map, symbol_table)?),
+        Type::Pointer(ptr) => Ok(8),
+        _ => panic!("Illegal type inside array:{:?}", temp)
+    }
+}
+
+fn get_array_access_depth(expression: &Expr) -> Result<i64,String> {
+    if let Expr::ArrayAccess(_, _) = expression {
+        let mut temp = expression.clone();
+        let mut depth = 0;
+        while let Expr::ArrayAccess(inner, _) = temp {
+            match inner.as_ref() {
+                Expr::VarUsage(_) => return Ok(depth),
+                Expr::ArrayAccess(new_inner, _) => {
+                    depth += 1;
+                    temp = *new_inner.clone()
+                },
+                _ => return Err(String::from("Non array access type expression in get depth")),
+            }
+        }
+        Err(String::from("Unexpected end of cycle in depth calculation"))
+    }  else {
+        return Err(String::from("Non array access type expression in get depth"))
+    }
+}
+
+fn get_array_access_type(var_type: &Type, depth: i64, max_depth: i64) -> Type {
+    let mut temp = var_type;
+    let mut cur_depth = 0;
+    while let Type::Array(inner, _) = temp {
+        if cur_depth == depth {
+            break
+        }
+        if cur_depth >= max_depth {
+            break;
+        }
+        cur_depth += 1;
+        temp = inner;
+    }
+
+    temp.clone()
 }
