@@ -8,8 +8,9 @@ use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::ast_types::Expr::ArrayAccess;
 use crate::ast_types::Stmt::{Block, For};
-use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry};
-use crate::lexer::SpecialCharacter::LeftCurlyBracket;
+use crate::codegen::get_size;
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry, StructDef};
+use crate::lexer::SpecialCharacter::{LeftCurlyBracket, RightCurlyBracket};
 
 
 struct ExpressionParser {
@@ -390,9 +391,9 @@ pub fn generate_ast_tree(
                         }
                         result.push(parse_type_declaration(&mut token_iter, type_map, symbol_table, &mut cur_type)?);
                     }
-                    // Keyword::TypeDef => {
-                    //
-                    // }
+                    Keyword::TypeDef => {
+                        parse_type_def(&mut token_iter, type_map, symbol_table)?;
+                    }
                     _ => return Err(format!("Unexpected keyword {:?}, at global scope", keyword))
                 }
             }
@@ -402,7 +403,97 @@ pub fn generate_ast_tree(
     Ok(result)
 }
 
+fn parse_type_def(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<(), String> {
+    expect_token(token_iter, Token::Keyword(Keyword::Struct))?;
+    //consume struct name:
+    let name;
+    if let Some(Token::Identifier(identifier)) = token_iter.next() {
+       name = identifier;
+    } else {
+        return Err(String::from("No identifier after struct keyword"))
+    }
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
+    // while scope does not end parse struct fields
+    let struct_type = Type::Struct(name.clone());
+    type_map.insert(name.clone(), struct_type.clone());
+    let mut fields: HashMap<String, Type> = HashMap::new();
+    while !matches!(token_iter.peek(), Some(Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket)) | None) {
+        let cur_type = token_iter.next().unwrap();
+        let mut field_name;
+        let mut cur_field_type : Type = match cur_type {
+            Token::Identifier(identifier) => {
+                let type_op = type_map.get(&identifier);
+                if type_op.is_none() {
+                    return Err(format!("Undefined type: {identifier} during parsing of struct: {name}"))
+                }
+                type_op.unwrap().clone()
+            },
+            Token::Keyword(Keyword::Type(Type)) => {
 
+                Type.clone()
+            },
+            _ => return Err(format!("Invalid token instead of type in field of:{name} struct"))
+        };
+        //check for *
+        while let Some(Token::Operator(Operator::Multiplication)) = token_iter.peek().cloned() {
+            let pointer_type = Type::Pointer(Box::from(cur_field_type.clone()));
+            cur_field_type= pointer_type;
+            token_iter.next();
+        }
+        //consume name
+        let next = token_iter.next();
+        if let Some(Token::Identifier(identifier)) = next {
+            field_name = identifier;
+        } else {
+            return Err(format!("Invalid token: {:?}, instead of field field_name in struct: {:?}", next, name))
+        };
+        // check for []
+        while let Some(Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket)) = token_iter.peek() {
+            expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket))?;
+            let size;
+            let next_token = token_iter.next();
+            if let Some(Token::Constant(number)) = next_token {
+                size = number;
+            } else {
+                return Err(format!("Unexpected token: {:?} found after parsing [] in struct: {name}, field: {field_name}", next_token))
+            }
+            cur_field_type = Type::Array(Box::from(cur_field_type), size);
+            expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightSquareBracket))?;
+        }
+        if cur_field_type == struct_type {
+            return Err(format!("You cannot have field of same type inside try: {:?}*{name}", struct_type))
+        }
+        fields.insert(field_name, cur_field_type);
+        expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
+    }
+    let total_size = calculate_struct_total_size(&fields, type_map, symbol_table)?;
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket))?;
+    expect_token(token_iter, Token::Identifier(name.clone()))?;
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
+    let def = StructDef {
+        name: name.clone(),
+        fields,
+        size: total_size,
+    };
+    symbol_table.insert(name, SymbolTableEntry::StructDef(def));
+    Ok(())
+}
+
+fn calculate_struct_total_size(
+    fields: &HashMap<String, Type>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<i64, String> {
+    let mut acum = 0;
+    for (name, field_type) in fields {
+        acum += get_size(field_type, type_map, symbol_table)?;
+    }
+    Ok(acum)
+}
 
 /// Parses scope and returns statements, that belong to it.
 ///

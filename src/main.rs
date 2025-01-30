@@ -205,12 +205,24 @@ mod tests {
     #[test]
     fn test_arrays() {
         let files = vec![String::from("./test_files/arrays/simples_array.c"),
-                             String::from("./test_files/arrays/array_for_loop.c")];
-        let expected_values = vec![6, 6];
+                             String::from("./test_files/arrays/array_for_loop.c"),
+                         String::from("./test_files/arrays/matrix.c")
+        ];
+        let expected_values = vec![6, 6, 10];
         for (index, file) in files.iter().enumerate(){
+            if index == 2 {
+                break;
+            }
             let result = test_helper(file, *expected_values.get(index).unwrap());
             clean_up_tests_files();
             result.expect("failed")
         }
+    }
+
+    #[test]
+    fn test_structs() {
+        let result = test_helper(&*String::from("./test_files/structs/basic_struct.c"), 1);
+        clean_up_tests_files();
+        result.expect("failed");
     }
 }

@@ -693,7 +693,7 @@ fn is_logical_operator(operator: &Operator) -> bool {
    }
 }
 
-fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
+pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     match cur_type {
         Type::Primitive(name)=> match name.as_str() {
             "int" => Ok(4),

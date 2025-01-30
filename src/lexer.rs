@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::lexer::FoundLongToken::{Found, NotFound};
 
 ///
@@ -50,9 +51,9 @@ pub enum Type {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StructDef {
-    name: String,
-    fields: Vec<(String, Type)>,
-    size: i64,
+    pub name: String,
+    pub fields: HashMap<String, Type>,
+    pub size: i64,
 }
 
 
@@ -77,6 +78,7 @@ pub enum Keyword {
     Else,
     SizeOf,
     TypeDef,
+    Struct,
 }
 
 ///
@@ -104,6 +106,8 @@ pub enum Operator {
     PrefixInc,
     PostfixInc,
     ArrayAccess,
+    StructAccess,
+    StructPtrAccess,
 }
 
 impl Operator {
@@ -306,6 +310,8 @@ fn get_keyword(token: &str) -> Result<Keyword, String> {
          "if" => Ok(Keyword::If),
          "else" => Ok(Keyword::Else),
          "return" => Ok(Keyword::Return),
+         "typedef" => Ok(Keyword::TypeDef),
+         "struct" => Ok(Keyword::Struct),
         _ => Err("unexpected error during parsing keyword".to_string()),
     }
 }
@@ -322,6 +328,7 @@ fn get_operator(token: &str) -> Result<Operator, String> {
         "<" => Ok(Operator::Less),
         ">" => Ok(Operator::More),
         "&" => Ok(Operator::Ref),
+        "." => Ok(Operator::StructAccess),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }
