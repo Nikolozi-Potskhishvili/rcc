@@ -1,9 +1,11 @@
 use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
 use std::env::args;
+use std::fmt::format;
 use std::hash::Hash;
 use std::ops::{Deref};
 use std::rc::Rc;
+use lazy_static::lazy_static;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::expression_codgen::generate_expression_instructions;
 use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
@@ -261,10 +263,16 @@ fn generate_while_instructions(
     labels.insert("while_end".to_string(), last_end + 1);
 
     result += &*format!("while_beg{}:\n", last_while);
-    generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
+    let reg = generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
     result += &*result_vec.join("\n");
     result += "\n";
-    result += "    test al, al\n";
+    if reg.is_none() {
+        result += "    pop rax\n";
+        result += "    test rax, rax\n";
+    } else {
+        let reg_unwrap = reg.unwrap();
+        result += format!("    test {reg_unwrap}, {reg_unwrap}\n").as_str();
+    }
     result += &*format!("    jz while_end{}\n", last_end);
 
     let body_binding = body.borrow_mut();
@@ -292,18 +300,24 @@ fn generate_if_else_instructions(
 ) -> Result<String, String> {
     let mut result = String::new();
     let mut result_vec = Vec::new();
-    generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, type_map, symbol_table)?;
-    result += &*result_vec.join("\n");
-    result += "\n";
-
     let if_label_number = labels.get("if_label").copied().unwrap_or(0);
     labels.insert("if_label".to_string(), if_label_number + 1);
     let else_label_number = labels.get("else_label").copied().unwrap_or(0);
     labels.insert("else_label".to_string(), else_label_number + 1);
     let end_label_number = labels.get("end_label").copied().unwrap_or(0);
     labels.insert("end_label".to_string(), end_label_number + 1);
+    let reg = generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, type_map, symbol_table)?;
+    result += &*result_vec.join("\n");
+    result += "\n";
+    if reg.is_none() {
+        result += "    pop rax\n";
+        result += "    test rax, rax\n";
+        result += format!("\n    cmp rax, 1\n    je if_label{}\n", if_label_number).as_str();
+    } else {
+        let reg_unwrap = reg.unwrap();
+        result += format!("\n    cmp {reg_unwrap}, 1\n    je if_label{}\n", if_label_number).as_str();
+    }
     //result += &*pop_into_reg_instruction(8);
-    result += format!("\n    cmp al, 1\n    je if_label{}\n", if_label_number).as_str();
     if else_branch.is_some() {
         result += format!("    jmp else_label{}\n", else_label_number).as_str();
     }
@@ -346,7 +360,16 @@ fn generate_return_instructions(
     if reg.is_none() {
         instruction_vec.push(String::from("    pop rax"));
     } else {
-        instruction_vec.push(format!("    mov rax, {}", reg.unwrap()));
+        let reg_unwrap = reg.unwrap();
+        if has_suffix(&reg_unwrap) {
+            if get_suffix_char(&reg_unwrap) == Some('d') {
+                instruction_vec.push(format!("    mov eax, {}", reg_unwrap));
+            } else {
+                instruction_vec.push(format!("    movzx rax, {}", reg_unwrap));
+            }
+        } else {
+            instruction_vec.push(format!("    mov rax, {}", reg_unwrap));
+        }
     }
     Ok(instruction_vec.join("\n") + "\n")
 }
@@ -519,4 +542,23 @@ pub fn get_array_access_type(var_type: &Type, depth: i64, max_depth: i64) -> Typ
     }
 
     temp.clone()
+}
+
+pub fn has_suffix(reg: &String) -> bool {
+    if let Some(last_char) = reg.chars().last() {
+        if matches!(last_char, 'b' | 'w' | 'd') {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn get_suffix_char(reg: &String) -> Option<char> {
+    if let Some(last_char) = reg.chars().last() {
+        if matches!(last_char, 'b' | 'w' | 'd') {
+            return Some(last_char)
+        }
+
+    }
+    None
 }

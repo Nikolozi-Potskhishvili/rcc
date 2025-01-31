@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::ast_types::{BinaryExpression, Expr, UnaryExpr};
-use crate::codegen::{get_array_access_depth, get_array_underlying_size, get_size, Variable};
+use crate::codegen::{get_array_access_depth, get_array_dimensions, get_array_underlying_size, get_size, get_suffix_char, has_suffix, Variable};
 use crate::lexer::{Constant, Operator, SymbolTableEntry, Type};
 
 ///
@@ -66,7 +66,7 @@ fn generate_expression(
 
             if let Some(reg) = reg_pool.allocate() {
                 result_vec.push(format!("    mov {}{}, {}[rbp - {}]", reg, suffix, instruction, var.memory_offset));
-                Ok(Some(reg))
+                Ok(Some(reg + suffix.as_str()))
             } else {
                 result_vec.push(format!("    push {}[rbp - {}]", instruction, var.memory_offset));
                 Ok(None)
@@ -76,12 +76,12 @@ fn generate_expression(
             let array_name  = get_array_name_from_access_expr(&current_node)?;
             let array_type = &var_table.get(&array_name).unwrap().var_type;
             let underlying_size = get_array_underlying_size(&array_type, type_map, symbol_table)?;
-            let depth = get_array_access_depth(&current_node)?;
+            let dimensions = get_array_dimensions(array_type);
             //generate ident instructions
             let addr_reg = generate_array_access_instructions(
                 current_node,
                 &mut 0,
-                depth as i64,
+                dimensions.len() as i64,
                 underlying_size,
                 var_table,
                 result_vec,
@@ -149,7 +149,7 @@ fn generate_array_access_instructions(
                 inner, cur_depth, depth, underlying_size,
                 var_table, result_vec, type_map, symbol_table, reg_pool
             )?.ok_or("Missing base address")?;
-
+            println!("{:?} and {:?}", inner, index_expr);
             // Evaluate index to register
             let index_reg = generate_expression(
                 index_expr, var_table, result_vec,
@@ -193,13 +193,22 @@ fn generate_binary_instruction (
         return handle_assignment(left, right, var_table, result_vec, type_map, symbol_table, reg_pool)
     }
 
-    let target_reg = reg_pool.allocate().ok_or("No registers available for binary operation")?;
+    let mut target_reg = reg_pool.allocate().ok_or("No registers available for binary operation")?;
     let left_reg = generate_expression(left, var_table, result_vec, type_map, symbol_table, reg_pool)?;
     let right_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool)?;
 
     // Move values to target registers if needed
     if let Some(left_reg) = left_reg {
-        result_vec.push(format!("    mov {}, {}", &target_reg, left_reg));
+        if has_suffix(&left_reg) {
+            if get_suffix_char(&left_reg) == Some('d') {
+                result_vec.push(format!("    mov {}d, {}", &target_reg, left_reg));
+                //target_reg.push('d');
+            } else {
+                result_vec.push(format!("    movzx {}, {}", &target_reg, left_reg));
+            }
+        } else {
+            result_vec.push(format!("    mov {}, {}", &target_reg, left_reg));
+        }
         reg_pool.release(left_reg);
     } else {
         result_vec.push(format!("    pop {}", &target_reg));
@@ -264,18 +273,40 @@ fn handle_assignment(
             }
         },
         Expr::ArrayAccess(var_expr, indexing_expr) => {
-            // let addr_reg = generate_array_address(left, var_table, result_vec, type_map, symbol_table, reg_pool)?;
-            // let size = get_array_element_size(left, var_table, type_map, symbol_table)?;
-            // let (instruction, suffix) = get_type_specifiers(size)?;
-            //
-            // if let Some(reg) = rhs_reg {
-            //     result_vec.push(format!("    mov {}[{}], {}{}", instruction, addr_reg, reg, suffix));
-            //     reg_pool.release(reg);
-            // } else {
-            //     result_vec.push(format!("    pop {}", addr_reg));  // Pop value into temporary register
-            //     result_vec.push(format!("    mov {}[{}], {}", instruction, addr_reg, addr_reg));
-            // }
-            // reg_pool.release(addr_reg);
+            let mut size ;
+            let array_name = get_array_name_from_access_expr(&left)?;
+            let array_var = var_table.get(&array_name);
+            if array_var.is_none() {
+                return Err(format!("No arrray var as {array_name} defined"))
+            }
+            let array_type = array_var.unwrap().var_type.clone();
+            let underlying_size =get_array_underlying_size(&array_type, type_map, symbol_table)?;
+            let dimensions = get_array_dimensions(&array_type);
+            let depth = get_array_access_depth(&left)?;
+            if depth + 1 == dimensions.len() as i64 {
+                size = underlying_size;
+            } else {
+                size = 8;
+            }
+            let (instruction, suffix) = get_type_specifiers(size)?;
+            let addr_reg = generate_array_access_instructions(
+                left, &mut 0, dimensions.len() as i64, underlying_size, var_table, result_vec, type_map, symbol_table, reg_pool)?;
+            if addr_reg.is_none() {
+
+            } else {
+
+            }
+            let addr_reg_str = addr_reg.unwrap();
+            if let  Some(reg) = rhs_reg {
+                result_vec.push(format!("    mov {}[{}], {}{}", instruction, addr_reg_str, reg, suffix));
+                reg_pool.release(reg);
+            } else {
+                let temp_reg = reg_pool.allocate()
+                    .ok_or("No available registers for temporary storage")?;
+                result_vec.push(format!("    pop {}", temp_reg));  // Pop value into temporary register
+                result_vec.push(format!("    mov {}[{}], {}", instruction, addr_reg_str, temp_reg));
+            }
+            reg_pool.release(addr_reg_str.clone());
         },
         _ => return Err("Invalid left-hand side in assignment".to_string())
     };
@@ -349,7 +380,7 @@ fn handle_dereference(
     result_vec.push(format!("    mov {}{}, {}[{}]", value_reg, suffix, instruction, addr_reg));
     reg_pool.release(addr_reg);
 
-    Ok(Some(value_reg))
+    Ok(Some(value_reg + suffix.as_str()))
 }
 
 fn handle_arithmetic_unary(
@@ -438,7 +469,10 @@ impl RegisterPool {
         self.available.pop()
     }
 
-    fn release(&mut self, reg: String) {
+    fn release(&mut self, mut reg: String) {
+        if has_suffix(&reg) {
+            reg.pop();
+        }
         self.available.push(reg);
     }
 }
@@ -463,10 +497,10 @@ fn is_logical_operator(operator: &Operator) -> bool {
 
 fn get_type_specifiers(size: i64) -> Result<(&'static str, &'static str), String> {
     match size {
-        1 => Ok(("byte", "b")),
-        2 => Ok(("word", "w")),
-        4 => Ok(("dword", "d")),
-        8 => Ok(("qword", "")),
+        1 => Ok(("byte ", "b")),
+        2 => Ok(("word ", "w")),
+        4 => Ok(("dword ", "d")),
+        8 => Ok(("qword ptr ", "")),
         _ => Err(format!("Unsupported data size: {}", size)),
     }
 }

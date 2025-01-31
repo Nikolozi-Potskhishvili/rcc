@@ -291,7 +291,7 @@ impl ExpressionParser {
         match var {
             SymbolTableEntry::Variable(cur_type) => {
                 Ok(Expr::VarUsage(variable_name))
-            }
+            },
             // SymbolTableEntry::FunDef(..) => {
             //
             // }
