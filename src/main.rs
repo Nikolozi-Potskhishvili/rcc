@@ -13,6 +13,8 @@ mod parser;
 mod semantic_analysis;
 mod codegen;
 mod ast_types;
+mod expression_parser;
+mod expression_codgen;
 
 fn main() {
     let args : Vec<String> = env::args().collect();
@@ -206,11 +208,12 @@ mod tests {
     fn test_arrays() {
         let files = vec![String::from("./test_files/arrays/simples_array.c"),
                              String::from("./test_files/arrays/array_for_loop.c"),
+                         String::from("./test_files/arrays/array_of_pointers.c"),
                          String::from("./test_files/arrays/matrix.c")
         ];
-        let expected_values = vec![6, 6, 10];
+        let expected_values = vec![6, 6, 10, 10];
         for (index, file) in files.iter().enumerate(){
-            if index == 2 {
+            if index == 3 {
                 break;
             }
             let result = test_helper(file, *expected_values.get(index).unwrap());

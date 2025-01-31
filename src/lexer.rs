@@ -108,6 +108,10 @@ pub enum Operator {
     ArrayAccess,
     StructAccess,
     StructPtrAccess,
+    LessEqual,
+    MoreEqual,
+    Equal,
+    NotEqual,
 }
 
 impl Operator {

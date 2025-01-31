@@ -1,26 +1,22 @@
 use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
-use std::env::var;
-use std::fmt::format;
-use std::fs::FileType;
+use std::env::args;
 use std::hash::Hash;
 use std::ops::{Deref};
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
+use crate::expression_codgen::generate_expression_instructions;
 use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
 
 #[derive(Clone, Debug, PartialEq)]
-struct Variable {
-    var_type: Type,
-    memory_offset: i64,
+pub struct Variable {
+    pub(crate) var_type: Type,
+    pub(crate) memory_offset: i64,
     register: Option<String>,
     defined: bool,
     pointer: bool,
 }
 
-enum VariableState {
-    Undefined,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Scope {
@@ -120,7 +116,6 @@ fn gen_block_rec(
                 }
                 let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
                 result += &instructions;
-                result += &"    pop rax\n".to_string();
                 result += &format!("    add rsp, {}\n", local_stack);
                 result+= "    mov rsp, rbp\n    pop rbp\n";
                 result += "    ret\n";
@@ -170,9 +165,14 @@ fn generate_for_loop_instructions(
     // is checked every time
     if condition.is_some() {
         let condition_some = condition.clone().unwrap();
-        generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
-        //result_vec.push(pop_into_reg_instruction(8));
-        result_vec.push("    test al, al".to_string());
+        let reg = generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
+        if reg.is_none() {
+            result_vec.push(String::from("    pop rax"));
+            result_vec.push(format!("    test rax, rax"));
+        } else {
+            let reg_str = reg.unwrap();
+            result_vec.push(format!("    test {reg_str}, {reg_str}"));
+        }
         result_vec.push(format!("    jz for_end{last_end}"));
     }
     if body.is_some() {
@@ -343,6 +343,11 @@ fn generate_return_instructions(
 ) -> Result<(String), String> {
     let mut instruction_vec = Vec::new();
     let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, type_map, symbol_table)?;
+    if reg.is_none() {
+        instruction_vec.push(String::from("    pop rax"));
+    } else {
+        instruction_vec.push(format!("    mov rax, {}", reg.unwrap()));
+    }
     Ok(instruction_vec.join("\n") + "\n")
 }
 fn allocate_var_on_stack(
@@ -386,312 +391,7 @@ fn store_var_on_stack(
     generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
     Ok(instruction_vec.join("\n") + "\n")
 }
-///
-///  Binary operations use R8 for storing result of left side of expression and R9 for right side
-///  Unary operations use R8 for storing result
-///
-///
-fn generate_expression_instructions(
-    expression_root: &Expr,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<(), String> {
-    let current_node = expression_root;
-    return match current_node {
-        Expr::BinaryExpr(BinaryExpression{left, right, operator })=> {
-            Ok(generate_binary_institution(left, right, operator.clone(), var_table, result_vec, type_map, symbol_table)?)
-        },
-        Expr::UnaryExpr(UnaryExpr{ operator, operand }) => {
-            Ok(generate_unary_instructions(operand, operator.clone(), var_table, result_vec, type_map, symbol_table)?)
-        },
-        Expr::Const(Constant::Long(value)) => {
-            result_vec.push(format!("    mov r8, {}", *value));
-            result_vec.push(push_from_reg_on_stack(8));
-            Ok(())
-        },
-        Expr::VarUsage(var_name) => {
-            let var_op = var_table.get(var_name);
-            if var_op.is_none() {
-                return Err(format!("Variable {}, was not defined", var_name))
-            }
-            let var = var_op.unwrap();
-            let memory_offset = var.memory_offset;
-            let size = get_size(&var.var_type, type_map, symbol_table)?;
 
-            let instruction = get_type_instruction(size)?;
-            let suffix = get_register_suffix(size)?;
-
-            result_vec.push(format!("    mov r8{suffix}, {instruction}[rbp - {}]", memory_offset));
-            result_vec.push(push_from_reg_on_stack(8));
-            Ok(())
-        },
-        Expr::ArrayAccess(inner, ident) => {
-            //generate ident instructions
-            let name = get_array_name_from_access_expr(&current_node.clone())?;
-            let var = var_table.get(&name).unwrap();
-            let depth = get_array_dimensions(&var.var_type).len();
-            let underlying_size = get_array_underlying_size(&var.var_type, type_map, symbol_table)?;
-            generate_array_access_instructions(current_node, &mut 0, depth as i64, underlying_size, var_table, result_vec, type_map, symbol_table)?;
-            result_vec.push(pop_into_reg_instruction(8));
-            result_vec.push(format!("    mov r9,{underlying_size}[r8]"));
-            result_vec.push(push_from_reg_on_stack(9));
-            Ok(())
-        }
-        _ => Err("Invalid node type during expression codgen".to_string())
-    }
-}
-
-fn get_array_name_from_access_expr(expression: &Expr) -> Result<String, String> {
-    let mut temp_node = expression;
-    while let Expr::ArrayAccess(inner, _) = temp_node {
-        temp_node = inner;
-    }
-    match temp_node {
-        Expr::VarUsage(name) => Ok(String::from(name)),
-        _ => return Err("".to_string())
-    }
-}
-
-fn generate_array_access_instructions(
-    expression: &Expr,
-    cur_depth: &mut i64,
-    depth: i64,
-    underlying_size: i64,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<(), String> {
-    match expression {
-        // Base case: The array variable itself
-        Expr::VarUsage(name) => {
-            let var_op = var_table.get(name);
-            if var_op.is_none() {
-                return Err(format!("Array with identifier {name} is not declared"));
-            }
-            let var = var_op.unwrap();
-            let base_offset = var.memory_offset;
-
-            // Load the base address of the array
-            result_vec.push(format!("    lea r8, [rbp - {}]", base_offset));
-            result_vec.push(push_from_reg_on_stack(8));
-            Ok(())
-        }
-        // Recursive case: Array access
-        Expr::ArrayAccess(inner, indexing) => {
-            *cur_depth += 1;
-            generate_array_access_instructions(inner, cur_depth, depth, underlying_size,var_table, result_vec, type_map, symbol_table)?;
-
-            // Process the indexing expression (calculate index value)
-            generate_expression_instructions(indexing, var_table, result_vec, type_map, symbol_table)?;
-
-            let mut elem_size = 0;
-            // Get the type of the inner array
-            if(*cur_depth == depth) {
-                //elem_size = get_array_underlying_size()?;
-                elem_size = underlying_size;
-            } else {
-                elem_size = 8;
-            }
-
-            result_vec.push(pop_into_reg_instruction(9)); // Pop index into r9
-            result_vec.push(format!("    imul r9, {}", elem_size)); // Scale index by element size
-            result_vec.push(pop_into_reg_instruction(8)); // Pop base address into r8
-            result_vec.push("    add r8, r9".to_string()); // Compute final address
-            result_vec.push(push_from_reg_on_stack(8));
-
-            return Ok(())
-        }
-        _ => return Err(format!("Invalid expression in array access: {:?}", expression)),
-    }
-}
-
-/// Generates asm instructions for binary expression. returns i32 which represent stack of offset where value is stored
-///
-///
-fn generate_binary_institution(
-    left: &Expr,
-    right: &Expr,
-    operator: Operator,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<(), String> {
-
-    let right_offset= generate_expression_instructions(right, var_table, result_vec, type_map, symbol_table)?;
-    let load_right = pop_into_reg_instruction(9);
-
-    if  let Operator::Assign = operator {
-        // expect l value on left
-        match left {
-            Expr::VarUsage(name) => {
-                if !var_table.contains_key(name) {
-                    return Err(format!("No declared var as:{name}").to_string())
-                }
-                let var = var_table.get(name).unwrap();
-                let var_offset = var.memory_offset;
-                let size = get_size(&var.var_type, type_map, symbol_table)?;
-                let instruction = get_type_instruction(size)?;
-                let reg_suffix = get_register_suffix(size)?;
-                result_vec.push(load_right);
-                result_vec.push(format!("    mov {instruction}[rbp - {var_offset}], r9{reg_suffix}"));
-                return Ok(())
-            },
-            Expr::ArrayAccess(var_expr, indexing_expr) => {
-                let name = get_array_name_from_access_expr(&left.clone())?;
-                let var = var_table.get(&name).unwrap();
-                let depth = get_array_dimensions(&var.var_type).len();
-                let underlying_size = get_array_underlying_size(&var.var_type, type_map, symbol_table)?;
-                generate_array_access_instructions(left, &mut 0, depth as i64, underlying_size, var_table, result_vec, type_map, symbol_table)?;
-                result_vec.push(pop_into_reg_instruction(8)); // load adress into r8
-
-                let size = underlying_size;
-                let instruction = get_type_instruction(size)?;
-                let reg_suffix = get_register_suffix(size)?;
-
-                result_vec.push(load_right);
-                result_vec.push(format!("    mov {instruction}[r8], r9{}", reg_suffix));
-                return Ok(())
-            },
-            _ => return Err("No l value before assignment operator".to_string())
-        };
-    }
-
-    let left_offset = generate_expression_instructions(left, var_table, result_vec, type_map, symbol_table)?;
-    let load_left = pop_into_reg_instruction(8);
-    result_vec.push(load_left);
-    result_vec.push(load_right);
-
-    let instruction = get_instruction_by_operator(&operator)?;
-    if is_logical_operator(&operator) {
-        result_vec.push("    cmp r8, r9".to_string());
-        let comp_res : &str = match operator {
-            Operator::And => "",
-            Operator::Or => "",
-            Operator::Less => "    setl al",
-            Operator::More => "    setg al",
-            _ => return Err(format!("Unexpected operator: {:?}, during codgen of logical op", operator))
-        };
-        result_vec.push(comp_res.to_string());
-        return Ok(())
-    } else {
-        result_vec.push(format!("    {} r8, r9", instruction));
-    }
-    //result_vec.push("    movzx r8, al".to_string());
-    result_vec.push(push_from_reg_on_stack(8));
-    Ok(())
-}
-
-fn generate_unary_instructions(
-    operand: &Expr,
-    operator: Operator,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<(), String> {
-    match operator {
-        Operator::Deref => {
-            return handle_deref(operand, var_table, result_vec, type_map, symbol_table)
-        }
-        Operator::Ref => {
-            return if let Expr::VarUsage(var_name) = operand {
-                if var_table.get(var_name).is_none() {
-                    return Err("Trying to get ref to var which is not declared".to_string())
-                }
-                let var = var_table.get(var_name).unwrap();
-                let offset = var.memory_offset;
-                result_vec.push(format!("    lea r8, [rbp - {offset}]"));
-                result_vec.push(push_from_reg_on_stack(8));
-                Ok(())
-            } else {
-                Err("Operand of deref is not lvalue".to_string())
-            }
-        }
-        _ => {}
-    }
-    let mem_offset = generate_expression_instructions(operand, var_table, result_vec, type_map, symbol_table)?;
-    let load_temp_res = pop_into_reg_instruction(8);
-    result_vec.push(load_temp_res);
-    let instruction = match operator {
-        Operator::Not => {
-            result_vec.push("    test r8, r8".to_string());
-            result_vec.push("    setz al".to_string());
-            result_vec.push("    movzx r8, al".to_string());
-            result_vec.push(push_from_reg_on_stack(8));
-            return Ok(());
-        },
-        Operator::Tilde => "not",
-        Operator::Minus => "neg",
-        _ => return Err("Unsupported operator".to_string())
-    };
-    result_vec.push(format!("    {} r8", instruction));
-    result_vec.push(push_from_reg_on_stack(8));
-    Ok(())
-}
-
-fn handle_deref(
-    operand: &Expr,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<(), String> {
-    match operand {
-        // Expr::BinaryExpr(expression) => {}
-        // Expr::UnaryExpr(expression) => {}
-        Expr::VarUsage(name) => {
-            let var = var_table.get(name);
-            if var.is_none() {
-                return Err(format!("No such var as: {name}"))
-            }
-            let var_unwrap = var.unwrap();
-            if let Type::Pointer(inner) = &var_unwrap.var_type {
-                let size = get_size(inner, type_map, symbol_table)?;
-                let size_instr = get_type_instruction(size)?;
-                let reg_suffix = get_register_suffix(size)?;
-                result_vec.push(format!("    mov r8, [rbp - {}]", var_unwrap.memory_offset));
-                result_vec.push(format!("    mov r8{reg_suffix}, {size_instr}[r8]"));
-                result_vec.push("    push r8".to_string())
-            } else {
-                return Err("Var used after deref is not pointer type".to_string())
-            }
-        }
-        Expr::Function_Call { .. } => {}
-        _ => return Err(format!("Invalid expression {:?} during dereference", operand).to_string())
-    }
-    Ok(())
-}
-
-enum _StorageLocation {
-    // register number
-    Register(i32),
-    //memory offset
-    Memory(i32),
-}
-
-fn get_instruction_by_operator(operator: &Operator) -> Result<&str, String> {
-    return match operator {
-        Operator::Assign => Ok(""),
-        Operator::More => Ok(""),
-        Operator::Less => Ok(""),
-        Operator::Plus => Ok("add"),
-        Operator::Minus => Ok("sub"),
-        Operator::Division => Ok("div"),
-        Operator::Multiplication => Ok("imul"),
-        _ => return Err("Unsupported operator".to_string())
-    }
-}
-
-fn is_logical_operator(operator: &Operator) -> bool {
-   return match operator {
-        Operator::Or | Operator::And | Operator::Less | Operator::More => true,
-        _ => false
-   }
-}
 
 pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     match cur_type {
@@ -714,15 +414,15 @@ pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table:
 
 /// Generates Instructions for loading var from mem to register
 ///
-fn pop_into_reg_instruction(reg: i32) -> String {
+pub fn pop_into_reg_instruction(reg: i32) -> String {
     format!("    pop r{reg}").to_string()
 }
 
-fn push_from_reg_on_stack(reg: i32) -> String {
+pub fn push_from_reg_on_stack(reg: i32) -> String {
     format!("    push r{reg}")
 }
 
-fn get_type_instruction(size: i64 ) -> Result<String, String> {
+pub fn get_type_instruction(size: i64 ) -> Result<String, String> {
     Ok(match size {
         1 => "byte ",
         2 => "word ",
@@ -732,7 +432,7 @@ fn get_type_instruction(size: i64 ) -> Result<String, String> {
     }.to_string())
 }
 
-fn get_register_suffix(size: i64) -> Result<String, String> {
+pub fn get_register_suffix(size: i64) -> Result<String, String> {
     Ok(match size {
         1 => "b",
         2 => "w",
@@ -741,7 +441,7 @@ fn get_register_suffix(size: i64) -> Result<String, String> {
         _ => return Err(format!("size {size} is illigal")),
     }.to_string())
 }
-fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
+pub fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
     let mut tem_type = array_type;
     let mut res = Vec::new();
     while let Type::Array(inner, size) = tem_type {
@@ -752,7 +452,7 @@ fn get_array_dimensions(array_type: &Type) -> Vec<i64> {
     res
 }
 
-fn get_array_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
+pub fn get_array_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     let mut accum = 0;
     let mut temp = array;
     while let Type::Array(inner, size) = temp {
@@ -772,7 +472,7 @@ fn get_array_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: 
     Ok(accum)
 }
 
-fn get_array_underlying_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
+pub fn get_array_underlying_size(array: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     let mut temp = array;
     while let Type::Array(inner, size) = temp {
         temp = inner
@@ -784,7 +484,7 @@ fn get_array_underlying_size(array: &Type, type_map: &HashMap<String, Type>, sym
     }
 }
 
-fn get_array_access_depth(expression: &Expr) -> Result<i64,String> {
+pub fn get_array_access_depth(expression: &Expr) -> Result<i64,String> {
     if let Expr::ArrayAccess(_, _) = expression {
         let mut temp = expression.clone();
         let mut depth = 0;
@@ -804,7 +504,7 @@ fn get_array_access_depth(expression: &Expr) -> Result<i64,String> {
     }
 }
 
-fn get_array_access_type(var_type: &Type, depth: i64, max_depth: i64) -> Type {
+pub fn get_array_access_type(var_type: &Type, depth: i64, max_depth: i64) -> Type {
     let mut temp = var_type;
     let mut cur_depth = 0;
     while let Type::Array(inner, _) = temp {
