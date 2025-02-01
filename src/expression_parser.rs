@@ -286,7 +286,12 @@ impl ExpressionParser {
     fn is_l_value(expression: &Expr) -> bool {
         if matches!(expression, Expr::VarUsage(_) | Expr::ArrayAccess(_, _) | Expr::StructAccess(_, _)) {
             return true
+        } else if let Expr::UnaryExpr(un) = expression {
+            if un.operator == Operator::Deref {
+                return true;
+            }
         }
+
         false
     }
 

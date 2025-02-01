@@ -2,6 +2,7 @@ use std::cell::{ RefCell};
 use std::collections::HashMap;
 use std::fmt::{Pointer};
 use std::iter::Peekable;
+use std::process::id;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
@@ -96,6 +97,16 @@ pub fn generate_ast_tree(
                     }
                     Keyword::TypeDef => {
                         parse_type_def(&mut token_iter, type_map, symbol_table)?;
+                    },
+                    Keyword::Void => {
+                        let mut cur_type = Type::Void;
+                        let mut name;
+                        if let Some(Token::Identifier(ident)) = token_iter.next() {
+                            name = ident;
+                        } else {
+                            return Err("Expected identifier after void keyword".to_string())
+                        }
+                        result.push(parse_function_declaration(&mut token_iter, &name, type_map, symbol_table, &mut cur_type)?)
                     }
                     _ => return Err(format!("Unexpected keyword {:?}, at global scope", keyword))
                 }
@@ -265,6 +276,20 @@ fn parse_scope_tokens(
                 token_iter.next();
                 handle_for_keyword(token_iter, type_map, symbol_table)?
             },
+            Token::Operator(Operator::Multiplication) => {
+                let mut iter_clone = token_iter.clone();
+                iter_clone.next();
+                if let Some((Token::Identifier(ident))) = iter_clone.peek() {
+                    let expr = parse_expression(token_iter, type_map, symbol_table)?;
+                    Rc::new(RefCell::new(Stmt::VarAssignment {
+                        name: ident.clone(),
+                        expr: Some(expr),
+                    }))
+                } else {
+                    return Err("Expected identifier after deref".to_string())
+                }
+
+            }
             // Skip any other tokens or syntax we don't support
             _ => continue,
         };
@@ -628,7 +653,7 @@ fn parse_args(
             None => return Err("Unexpected end of input while parsing function parameters.".to_string()),
         };
 
-        let cur_type = match next {
+        let mut cur_type = match next {
             Token::Identifier(ref ident) => {
                 if !type_map.contains_key(ident) {
                     return Err(format!("Type: {:?} was not defined", ident));
@@ -638,7 +663,11 @@ fn parse_args(
             Token::Keyword(Keyword::Type(arg_type)) => arg_type.clone(),
             token => return Err(format!("Unexpected token: {:?} instead of type of param", token)),
         };
-
+        if let Some(Token::Operator(Operator::Multiplication)) = token_iter.peek().cloned() {
+            let pointer_type = Type::Pointer(Box::from(cur_type.clone()));
+            cur_type = pointer_type;
+            token_iter.next();
+        }
         // Get the next token, expecting an identifier (parameter name)
         let name = match token_iter.next() {
             Some(Token::Identifier(ident)) => ident,

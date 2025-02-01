@@ -350,6 +350,7 @@ fn get_keyword(token: &str) -> Result<Keyword, String> {
          "return" => Ok(Keyword::Return),
          "typedef" => Ok(Keyword::TypeDef),
          "struct" => Ok(Keyword::Struct),
+         "void" => Ok(Keyword::Void),
         _ => Err("unexpected error during parsing keyword".to_string()),
     }
 }

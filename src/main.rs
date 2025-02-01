@@ -231,8 +231,15 @@ mod tests {
 
     #[test]
     fn test_functions() {
-        let result = test_helper(&*String::from("./test_files/functions/simple_functions.c"), 27);
-        clean_up_tests_files();
-        result.expect("failed");
+        let files = vec![
+            String::from("./test_files/functions/func_ptr.c"),
+            String::from("./test_files/functions/simple_functions.c"),
+        ];
+        let values = vec![23, 27];
+        for (index, file) in files.iter().enumerate() {
+            let result = test_helper(file, *values.get(index).unwrap());
+            clean_up_tests_files();
+            result.expect("failed");
+        }
     }
 }

@@ -403,14 +403,18 @@ fn generate_binary_instruction (
     let left_reg = generate_expression(left, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
     let right_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
 
+    let mut left_suf = String::from("");
     // Move values to target registers if needed
     if let Some(left_reg) = left_reg {
         if has_suffix(&left_reg) {
             if get_suffix_char(&left_reg) == Some('d') {
                 target_reg.push('d');
+                left_suf.push('d');
                 result_vec.push(format!("    mov {}, {}", &target_reg, left_reg));
                 //target_reg.push('d');
             } else {
+
+                left_suf.push(get_suffix_char(&left_reg).unwrap());
                 result_vec.push(format!("    movzx {}, {}", &target_reg, left_reg));
             }
         } else {
@@ -421,12 +425,14 @@ fn generate_binary_instruction (
         result_vec.push(format!("    pop {}", &target_reg));
     }
 
-    let temp_reg = right_reg.unwrap_or_else(|| {
+    let mut temp_reg = right_reg.unwrap_or_else(|| {
         let reg = reg_pool.allocate().expect("No registers available");
         result_vec.push(format!("    pop {}", reg));
         reg
     });
-
+    if !has_suffix(&temp_reg) {
+        temp_reg += &left_suf;
+    }
     if is_logical_operator(&operator) {
         handle_logical_operation(&target_reg, &temp_reg, operator, result_vec)?;
     } else {
@@ -529,6 +535,10 @@ fn handle_assignment(
             }
 
         }
+        // handle *x = ...
+        // Expr::UnaryExpr(un) => {
+        //     get_address()
+        // }
         _ => return Err("Invalid left-hand side in assignment".to_string())
     };
 
