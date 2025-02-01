@@ -416,6 +416,7 @@ fn generate_binary_instruction (
 
                 left_suf.push(get_suffix_char(&left_reg).unwrap());
                 result_vec.push(format!("    movzx {}, {}", &target_reg, left_reg));
+                target_reg.push(get_suffix_char(&left_reg).unwrap());
             }
         } else {
             result_vec.push(format!("    mov {}, {}", &target_reg, left_reg));
@@ -480,7 +481,7 @@ fn handle_assignment(
             let (instruction, suffix) = get_type_specifiers(size)?;
 
             if let Some(reg) = rhs_reg {
-                result_vec.push(format!("    mov {}[rbp - {}], {}{}", instruction, var.memory_offset, reg, suffix));
+                result_vec.push(format!("    mov {}[rbp - {}], {}", instruction, var.memory_offset, reg));
                 reg_pool.release(reg);
             } else {
                 result_vec.push(format!("    pop {}[rbp - {}]", instruction, var.memory_offset));
