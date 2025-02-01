@@ -7,6 +7,10 @@ typedef struct x {
 
 
 int main() {
+    int some = 10;
     x o;
-    return 1;
+    o.a = 1;
+    o.c = &some;
+    o.b = 5;
+    return o.b;
 }

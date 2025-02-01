@@ -37,6 +37,7 @@ pub enum Expr {
     Const(Constant),
     VarUsage(String),
     ArrayAccess(Box<Expr>, Box<Expr>),
+    StructAccess(Box<Expr>, String),
     Function_Call {
         name: String,
         args: Vec<Expr>

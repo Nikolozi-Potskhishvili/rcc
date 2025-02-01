@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::codegen::get_size;
 use crate::lexer::FoundLongToken::{Found, NotFound};
 
 ///
@@ -52,10 +53,40 @@ pub enum Type {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StructDef {
     pub name: String,
-    pub fields: HashMap<String, Type>,
+    pub fields: Vec<StructField>,
     pub size: i64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub field_type: Type,
+    pub offset: i64,
+}
+
+impl StructDef {
+    pub fn get_field_offset(&mut self, field_name: &String) -> i64 {
+        for field in &self.fields {
+            if field.name == *field_name {
+                return field.offset;
+            }
+        }
+        -1
+    }
+
+    pub fn contains_field(&mut self, field_name: &String) -> bool {
+        self.fields.iter().any(|field| &field.name == field_name)
+    }
+
+    pub fn get_field_type(&mut self, field_name: &String) -> Option<Type> {
+        for field in &self.fields {
+            if field.name == *field_name {
+                return Some(field.field_type.clone())
+            }
+        }
+        None
+    }
+}
 
 
 #[derive(Clone, Debug, PartialEq)]

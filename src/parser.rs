@@ -5,11 +5,10 @@ use std::iter::Peekable;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Expr::ArrayAccess;
-use crate::ast_types::Stmt::{Block, For};
+use crate::ast_types::Stmt::{Block, For, VarAssignment};
 use crate::codegen::get_size;
 use crate::expression_parser::ExpressionParser;
-use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry, StructDef};
+use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry, StructDef, StructField};
 use crate::lexer::SpecialCharacter::{LeftCurlyBracket, RightCurlyBracket};
 
 
@@ -123,7 +122,8 @@ fn parse_type_def(
     // while scope does not end parse struct fields
     let struct_type = Type::Struct(name.clone());
     type_map.insert(name.clone(), struct_type.clone());
-    let mut fields: HashMap<String, Type> = HashMap::new();
+    let mut fields: Vec<StructField> = Vec::new();
+    let mut cur_offset = 0;
     while !matches!(token_iter.peek(), Some(Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket)) | None) {
         let cur_type = token_iter.next().unwrap();
         let mut field_name;
@@ -170,7 +170,14 @@ fn parse_type_def(
         if cur_field_type == struct_type {
             return Err(format!("You cannot have field of same type inside try: {:?}*{name}", struct_type))
         }
-        fields.insert(field_name, cur_field_type);
+        let size = get_size(&cur_field_type, type_map, symbol_table)?;
+        let field_str = StructField {
+            name: field_name,
+            field_type: cur_field_type,
+            offset: cur_offset,
+        };
+        cur_offset += size;
+        fields.push(field_str);
         expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
     }
     let total_size = calculate_struct_total_size(&fields, type_map, symbol_table)?;
@@ -180,20 +187,21 @@ fn parse_type_def(
     let def = StructDef {
         name: name.clone(),
         fields,
-        size: total_size,
+        size: total_size + 1,
     };
     symbol_table.insert(name, SymbolTableEntry::StructDef(def));
     Ok(())
 }
 
 fn calculate_struct_total_size(
-    fields: &HashMap<String, Type>,
+    fields: &Vec<StructField>,
     type_map: &mut HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>
 ) -> Result<i64, String> {
     let mut acum = 0;
-    for (name, field_type) in fields {
-        acum += get_size(field_type, type_map, symbol_table)?;
+    for  field in fields {
+        let f_type = &field.field_type;
+        acum += get_size(f_type, type_map, symbol_table)?;
     }
     Ok(acum)
 }
@@ -449,25 +457,44 @@ fn handle_identifier_usage(
     if entry_option.is_none() {
         return Err(format!("Invalid identifier:{name} during parsing"))
     }
-    let entry = entry_option.unwrap();
+    let entry = entry_option.unwrap().clone();
     match entry {
         SymbolTableEntry::Variable(Type) => {
             match Type {
                 Type::Primitive(_) | Type::Pointer(_) => parse_primitive_identifier(token_iter, name, type_map, symbol_table),
-                Type::Array(inner, size) => parse_array_identifier(token_iter, name, type_map, symbol_table, inner.clone(), *size),
-                Type::Struct(name) => {
-                    //parse_struct_identifier(token_iter, name, type_map, symbol_table);
-                    return Err(String::from(""))
-                },
+                Type::Array(inner, size) => parse_array_identifier(token_iter, name, type_map, symbol_table, inner.clone(), size),
+                Type::Struct(struct_name) => parse_struct_identifier(token_iter, &struct_name, type_map, symbol_table),
                 // Type::Function => {}
                 Type::Void => return Err("Invalid use of keyword void".to_string()),
                 _ => Err("dff".to_string()),
             }
+        },
+        SymbolTableEntry::StructDef(str_def) => {
+            let name = &str_def.name;
+            let cur_type = type_map.get(name).ok_or(format!("No type as {name} declared"))?;
+            token_iter.next();
+
+            parse_type_declaration(token_iter, type_map, symbol_table, &mut cur_type.clone())
         }
         _ => return Err(format!("Invalid type of identifier:{:?} during parsing", entry)),
     }
 
 
+}
+
+fn parse_struct_identifier(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    type_name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<Rc<RefCell<Stmt>>, String> {
+    let next_token = token_iter.peek().cloned();
+    if let Some(Token::Identifier(name)) = next_token {
+        let expression_root = parse_expression(token_iter, type_map, symbol_table)?;
+        Ok(Rc::new(RefCell::new(VarAssignment { name: name.clone(), expr: Some(expression_root) })))
+    } else  {
+        return Err(format!("Expected identifier token, but got {:?}", next_token))
+    }
 }
 
 fn parse_array_identifier(
@@ -478,7 +505,6 @@ fn parse_array_identifier(
     inner_type: Box<Type>,
     dimension: i64,
 ) -> Result<Rc<RefCell<Stmt>>, String> {
-    let cur_dimensions = 0;
     // parse identifier;
     let expression = parse_expression(token_iter, type_map, symbol_table)?;
     Ok(Rc::new(RefCell::new(Stmt::VarAssignment {
@@ -602,6 +628,13 @@ fn parse_variable_declaration(
     }
     symbol_table.insert(var_name.clone(), SymbolTableEntry::Variable(cur_type.clone()));
     let expression = parse_expression(token_iter, type_map, symbol_table)?;
+    if let Type::Struct(_) = cur_type {
+        return Ok(Rc::new(RefCell::new(Stmt::VarDecl {
+            name: var_name.to_string(),
+            var_type: cur_type.clone(),
+            expr: None,
+        })))
+    }
     Ok(Rc::new(RefCell::new(Stmt::VarDecl {
         name: var_name.to_string(),
         var_type: cur_type.clone(),

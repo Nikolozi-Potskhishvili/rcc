@@ -430,6 +430,13 @@ pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table:
         Type::Array(arr_type, size) => {
             get_array_size(cur_type, type_map, symbol_table)
         },
+        Type::Struct(name) => {
+            let entry = symbol_table.get(&name.clone()).clone().unwrap();
+            return match entry {
+                SymbolTableEntry::StructDef(def) => Ok(def.size),
+                _ => Err("Impossible case".to_string())
+            }
+        }
         _ => return Err(format!("Unknown type as {:?}", cur_type)),
     }
 }
@@ -451,7 +458,7 @@ pub fn get_type_instruction(size: i64 ) -> Result<String, String> {
         2 => "word ",
         4 => "dword ",
         8 => "",
-        _ => return Err(format!("size {size} is illigal"))
+        _ => "",
     }.to_string())
 }
 
@@ -461,7 +468,7 @@ pub fn get_register_suffix(size: i64) -> Result<String, String> {
         2 => "w",
         4 => "d",
         8 => "",
-        _ => return Err(format!("size {size} is illigal")),
+        _ => "",
     }.to_string())
 }
 pub fn get_array_dimensions(array_type: &Type) -> Vec<i64> {

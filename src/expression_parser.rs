@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::process::id;
 use crate::ast_types::{BinaryExpression, Expr, UnaryExpr};
-use crate::ast_types::Expr::ArrayAccess;
+use crate::ast_types::Expr::{ArrayAccess, StructAccess};
 use crate::lexer::{Constant, Operator, SpecialCharacter, SymbolTableEntry, Token, Type};
 
 pub struct ExpressionParser {
@@ -217,6 +218,16 @@ impl ExpressionParser {
                     }
                     expr = ArrayAccess(Box::from(expr), Box::from(index_expression));
                 },
+                Token::Operator(Operator::StructAccess) => {
+                    let operator = Token::Operator(Operator::StructAccess);
+                    self.consume();
+                    let identifier_token = self.consume();
+                    if let Token::Identifier(identifier) = identifier_token {
+                        expr = StructAccess(Box::from(expr), identifier.clone());
+                    } else {
+                        return Err(format!("Expected identifier after '.', found {:?}", identifier_token));
+                    }
+                },
                 _ => break,
             }
         }
@@ -256,7 +267,7 @@ impl ExpressionParser {
 
 
     fn is_l_value(expression: &Expr) -> bool {
-        if matches!(expression, Expr::VarUsage(_) | Expr::ArrayAccess(_, _)) {
+        if matches!(expression, Expr::VarUsage(_) | Expr::ArrayAccess(_, _) | Expr::StructAccess(_, _)) {
             return true
         }
         false

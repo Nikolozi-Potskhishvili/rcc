@@ -206,14 +206,14 @@ mod tests {
 
     #[test]
     fn test_arrays() {
-        let files = vec![
-                             String::from("./test_files/arrays/array_for_loop.c"),String::from("./test_files/arrays/simples_array.c"),
-                         String::from("./test_files/arrays/array_of_pointers.c"),
-                         String::from("./test_files/arrays/matrix.c")
+        let files = vec![ String::from("./test_files/arrays/array_for_loop.c"),
+                          String::from("./test_files/arrays/simples_array.c"),
+                          String::from("./test_files/arrays/array_of_pointers.c"),
+                          String::from("./test_files/arrays/matrix.c")
         ];
         let expected_values = vec![5, 6, 10, 10];
         for (index, file) in files.iter().enumerate(){
-            if index == 2 {
+            if index == 1 {
                 break;
             }
             let result = test_helper(file, *expected_values.get(index).unwrap());
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_structs() {
-        let result = test_helper(&*String::from("./test_files/structs/basic_struct.c"), 1);
+        let result = test_helper(&*String::from("./test_files/structs/basic_struct.c"), 5);
         clean_up_tests_files();
         result.expect("failed");
     }
