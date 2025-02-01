@@ -10,7 +10,7 @@ use crate::codegen::get_size;
 use crate::expression_parser::ExpressionParser;
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry, StructDef, StructField};
 use crate::lexer::SpecialCharacter::{LeftCurlyBracket, RightCurlyBracket};
-
+use crate::lexer::SymbolTableEntry::FunDef;
 
 
 // current grammar:
@@ -36,7 +36,8 @@ fn parse_expression(
         match token {
             Token::Identifier(_) | Token::Constant(_) | Token::Operator(_)
                 | Token::SpecialCharacter(SpecialCharacter::LeftSquareBracket)
-            | Token::SpecialCharacter(SpecialCharacter::RightSquareBracket)=> {
+            | Token::SpecialCharacter(SpecialCharacter::RightSquareBracket)
+            | Token::SpecialCharacter(SpecialCharacter::Comma)=> {
                 extracted_tokens.push(token);
             },
             Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) => {
@@ -98,7 +99,11 @@ pub fn generate_ast_tree(
                     }
                     _ => return Err(format!("Unexpected keyword {:?}, at global scope", keyword))
                 }
-            }
+            },
+            // must be a struct type global var/function
+            Token::Identifier(some) => {
+
+            },
             _ => return Err("Unexpected token at global scope".to_string())
         }
     }
@@ -588,11 +593,15 @@ fn parse_function_declaration(
 ) -> Result<Rc<RefCell<Stmt>>, String> {
     // Expect parentheses `()` and '{'
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
-    let args = parse_args(token_iter);
-    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightParenthesis))?;
+    let args = parse_args(token_iter, type_map, symbol_table)?;
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
 
     let function_statements = parse_scope_tokens(token_iter, type_map, symbol_table)?;
+    symbol_table.insert(name.to_string(), FunDef(crate::lexer::FunDef{
+        funType: cur_type.clone(),
+        args: args.clone(),
+    }
+    ));
     let function_node = Rc::new(RefCell::new(Stmt::FnDecl {
         name: name.to_string(),
         return_type: cur_type.clone(),
@@ -603,9 +612,68 @@ fn parse_function_declaration(
 }
 
 fn parse_args(
-    token_iter: &mut Peekable<IntoIter<Token>>
-) -> Option<Vec<Stmt>> {
-    None
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+) -> Result<Option<Vec<Stmt>>, String> {
+    let mut args = Vec::new();
+
+    while !matches!(
+        token_iter.peek(),
+        Some(Token::SpecialCharacter(SpecialCharacter::RightParenthesis)) | None
+    ) {
+        // Get the next token safely
+        let next = match token_iter.next() {
+            Some(token) => token,
+            None => return Err("Unexpected end of input while parsing function parameters.".to_string()),
+        };
+
+        let cur_type = match next {
+            Token::Identifier(ref ident) => {
+                if !type_map.contains_key(ident) {
+                    return Err(format!("Type: {:?} was not defined", ident));
+                }
+                type_map.get(ident).unwrap().clone()
+            }
+            Token::Keyword(Keyword::Type(arg_type)) => arg_type.clone(),
+            token => return Err(format!("Unexpected token: {:?} instead of type of param", token)),
+        };
+
+        // Get the next token, expecting an identifier (parameter name)
+        let name = match token_iter.next() {
+            Some(Token::Identifier(ident)) => ident,
+            Some(token) => return Err(format!("Unexpected token: {:?} instead of name of param", token)),
+            None => return Err("Unexpected end of input after parameter type.".to_string()),
+        };
+
+        let size = get_size(&cur_type, type_map, symbol_table)?;
+
+        let cur_arg = Stmt::FnParam {
+            param_type: cur_type,
+            param_name: name,
+            param_size: size,
+        };
+        args.push(cur_arg);
+
+        // Get the next token and check if it's a comma or a closing parenthesis
+        match token_iter.peek() {
+            Some(Token::SpecialCharacter(SpecialCharacter::Comma)) => {
+                token_iter.next(); // Consume the comma and continue
+            }
+            Some(Token::SpecialCharacter(SpecialCharacter::RightParenthesis)) => {
+                token_iter.next(); // Consume the closing parenthesis and break
+                return Ok(Some(args))
+            }
+            Some(token) => {
+                return Err(format!("Invalid token: {:?}, after arg name in the func decl", token))
+            }
+            None => {
+                return Err("Unexpected end of input while parsing function parameters.".to_string())
+            }
+        }
+    }
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightParenthesis))?;
+    Ok(None)
 }
 ///
 /// Gets 3 parameters: token iterator, variable name and type. However, name of variable should not

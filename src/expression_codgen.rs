@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::env::var;
-use crate::ast_types::{BinaryExpression, Expr, UnaryExpr};
-use crate::codegen::{get_array_access_depth, get_array_dimensions, get_array_underlying_size, get_size, get_suffix_char, has_suffix, Variable};
-use crate::lexer::{Constant, Operator, StructDef, StructField, SymbolTableEntry, Type};
+use std::iter;
+use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
+use crate::codegen::{get_args_total_size, get_array_access_depth, get_array_dimensions, get_array_underlying_size, get_size, get_suffix_char, has_suffix, Variable};
+use crate::lexer::{Constant, FunDef, Operator, StructDef, StructField, SymbolTableEntry, Type};
 
 ///
 ///  Binary operations use R8 for storing result of left side of expression and R9 for right side
@@ -15,18 +15,25 @@ pub fn generate_expression_instructions(
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     let free_regs = vec![String::from("r8"), String::from("r9"), String::from("r10"), String::from("r11"),
     String::from("r12"), String::from("r13"), String::from("r14")];
     let mut reg_pool = RegisterPool::new(&*free_regs);
-    generate_expression(
+    let mut stack = *cur_stack;
+    let res = generate_expression(
         expression_root,
         var_table,
         result_vec,
         type_map,
         symbol_table,
         &mut reg_pool,
-    )
+        &mut stack,
+    );
+    if stack != *cur_stack {
+        return Err(String::from("Bad stack manipulation occured during expression codegen"))
+    }
+    res
 }
 
 fn generate_expression(
@@ -36,14 +43,15 @@ fn generate_expression(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     let current_node = expression_root;
     return match current_node {
         Expr::BinaryExpr(BinaryExpression{left, right, operator })=> {
-            Ok(generate_binary_instruction(left, right, operator.clone(), var_table, result_vec, type_map, symbol_table, reg_pool)?)
+            Ok(generate_binary_instruction(left, right, operator.clone(), var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?)
         },
         Expr::UnaryExpr(UnaryExpr{ operator, operand }) => {
-            Ok(generate_unary_expression(operand, operator.clone(), var_table, result_vec, type_map, symbol_table, reg_pool)?)
+            Ok(generate_unary_expression(operand, operator.clone(), var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?)
         },
         Expr::Const(Constant::Long(value)) => {
             if let Some(reg) = reg_pool.allocate() {
@@ -65,12 +73,20 @@ fn generate_expression(
 
             let instruction = crate::codegen::get_type_instruction(size)?;
             let suffix = crate::codegen::get_register_suffix(size)?;
-
+            let neg_offset = var.memory_offset < 0;
             if let Some(reg) = reg_pool.allocate() {
-                result_vec.push(format!("    mov {}{}, {}[rbp - {}]", reg, suffix, instruction, var.memory_offset));
+                if neg_offset {
+                    result_vec.push(format!("    mov {}{}, {}[rbp + {}]", reg, suffix, instruction, var.memory_offset.abs()));
+                }  else {
+                    result_vec.push(format!("    mov {}{}, {}[rbp - {}]", reg, suffix, instruction, var.memory_offset));
+                }
                 Ok(Some(reg + suffix.as_str()))
             } else {
-                result_vec.push(format!("    push {}[rbp - {}]", instruction, var.memory_offset));
+                if neg_offset {
+                    result_vec.push(format!("    push {}[rbp + {}]", instruction, var.memory_offset.abs()));
+                }  else {
+                    result_vec.push(format!("    push {}[rbp - {}]", instruction, var.memory_offset));
+                }
                 Ok(None)
             }
         },
@@ -90,6 +106,7 @@ fn generate_expression(
                 type_map,
                 symbol_table,
                 reg_pool,
+                cur_stack
             )?.ok_or("Array access failed")?;
 
             let (instr, suffix) = get_type_specifiers(underlying_size)?;
@@ -104,7 +121,7 @@ fn generate_expression(
             Ok(Some(value_reg))
         },
         Expr::StructAccess(inner, field) => {
-            let res = handle_struct_access(current_node, var_table, result_vec, type_map, symbol_table, reg_pool).unwrap().ok_or("")?;
+            let res = handle_struct_access(current_node, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack).unwrap().ok_or("")?;
             let target_reg = reg_pool.allocate().ok_or("No registers available")?;
             let mut struct_def = get_struct_def(inner, var_table, type_map, symbol_table)?;
             let field_offset =  struct_def.get_field_offset(field);
@@ -112,8 +129,71 @@ fn generate_expression(
             let (w, s) = get_type_specifiers(size)?;
             result_vec.push(format!("    mov {target_reg}{s}, {w}[{res}]"));
             Ok(Some(target_reg))
+        },
+        Expr::Function_Call { name, args } => {
+            handle_fn_call(name, args, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
         }
         _ => Err("Invalid node type during expression codgen".to_string())
+    }
+}
+
+
+fn handle_fn_call(
+    name: &String,
+    args: &Vec<Expr>,
+    var_table: &mut HashMap<String, Variable>,
+    result_vec: &mut Vec<String>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
+) ->Result<Option<String>, String> {
+    // allocate space for params, ensure stack is 16 byte alligned and store them
+    let mut allocated = 0;
+    let entry= symbol_table.get(name);
+    let mut args_vec;
+    if let Some(SymbolTableEntry::FunDef(def)) = entry {
+        args_vec = def.args.clone();
+        let fun_args = def.args.clone();
+        if fun_args.is_some() {
+            let total_size = get_args_total_size(&fun_args.unwrap())?;
+            allocated += total_size;
+        } else {
+        }
+    } else {
+        return Err("".to_string())
+    }
+    let mut padding = 0;
+    if (*cur_stack + allocated + 16) % 16 != 0 {
+        padding += 16 - ((*cur_stack + allocated + 16) % 16);
+
+    }
+    //allocate
+    result_vec.push(format!("    sub rsp, {}", padding + allocated));
+    let mut param_ptr = padding;
+    for (index, expr) in args.iter().enumerate() {
+        let reg = generate_expression(expr, var_table, result_vec,type_map, symbol_table, reg_pool, cur_stack)?.ok_or("")?;
+        let stmt = args_vec.clone().unwrap().get(index).unwrap().clone();
+        let (cur_type, name, size) = match stmt {
+            Stmt::FnParam { param_type, param_name, param_size } => (param_type, param_name, param_size),
+            _ => return Err("dfsdf".to_string())
+        };
+        let (w, s) = get_type_specifiers(size)?;
+        result_vec.push(format!("    mov {w}[rbp - {}], {reg}", *cur_stack + padding + param_ptr));
+        param_ptr += size;
+    }
+    //call func
+    result_vec.push(format!("    call _{name}"));
+    result_vec.push(format!("    add rsp, {}", padding + allocated));
+    // load the return value into reg
+    let reg = reg_pool.allocate();
+    if reg.is_none() {
+        result_vec.push("    pop rax".to_string());
+        Ok(None)
+    } else {
+        let reg_un = reg.unwrap();
+        result_vec.push(format!("    mov {}, rax", reg_un));
+        Ok(Some(reg_un))
     }
 }
 
@@ -124,10 +204,11 @@ fn handle_struct_access(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
     if let Expr::StructAccess(inner, field) = expression {
         // calculate inner offset
-        let base = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool)?
+        let base = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
             .ok_or("Failed to generate struct base address")?;
         // get offset of the field
         let target_reg = reg_pool.allocate().ok_or("No registers available")?;
@@ -148,6 +229,7 @@ fn get_address(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     match expression {
         Expr::VarUsage(name) => {
@@ -171,12 +253,13 @@ fn get_address(
                 type_map,
                 symbol_table,
                 reg_pool,
+                cur_stack,
             )?.ok_or("Array access failed")?;
 
             Ok(Some(addr_reg))
         },
         Expr::StructAccess(inner, field) => {
-            let inner_reg = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool)?.ok_or("")?;
+            let inner_reg = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?.ok_or("")?;
             let mut def = get_struct_def(expression, var_table, type_map, symbol_table)?;
             let offset = def.get_field_offset(field);
             result_vec.push(format!("    add {inner_reg}, {offset}"));
@@ -249,6 +332,7 @@ fn generate_array_access_instructions(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
     match expression {
         Expr::VarUsage(name) => {
@@ -268,13 +352,13 @@ fn generate_array_access_instructions(
             // Recursively get base address
             let mut base_reg = generate_array_access_instructions(
                 inner, cur_depth, depth, underlying_size,
-                var_table, result_vec, type_map, symbol_table, reg_pool
+                var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack
             )?.ok_or("Missing base address")?;
             println!("{:?} and {:?}", inner, index_expr);
             // Evaluate index to register
             let index_reg = generate_expression(
                 index_expr, var_table, result_vec,
-                type_map, symbol_table, reg_pool
+                type_map, symbol_table, reg_pool, cur_stack
             )?.ok_or("Missing index value")?;
 
             // Calculate element size (8 for pointers except last dimension)
@@ -307,22 +391,24 @@ fn generate_binary_instruction (
     result_vec: &mut Vec<String>,
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
-    reg_pool: &mut RegisterPool
+    reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
 
     if  let Operator::Assign = operator {
-        return handle_assignment(left, right, var_table, result_vec, type_map, symbol_table, reg_pool)
+        return handle_assignment(left, right, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
     }
 
     let mut target_reg = reg_pool.allocate().ok_or("No registers available for binary operation")?;
-    let left_reg = generate_expression(left, var_table, result_vec, type_map, symbol_table, reg_pool)?;
-    let right_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool)?;
+    let left_reg = generate_expression(left, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
+    let right_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
 
     // Move values to target registers if needed
     if let Some(left_reg) = left_reg {
         if has_suffix(&left_reg) {
             if get_suffix_char(&left_reg) == Some('d') {
-                result_vec.push(format!("    mov {}d, {}", &target_reg, left_reg));
+                target_reg.push('d');
+                result_vec.push(format!("    mov {}, {}", &target_reg, left_reg));
                 //target_reg.push('d');
             } else {
                 result_vec.push(format!("    movzx {}, {}", &target_reg, left_reg));
@@ -378,8 +464,9 @@ fn handle_assignment(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
-    let rhs_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool)?;
+    let rhs_reg = generate_expression(right, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
     match left {
         Expr::VarUsage(name) => {
             let var = var_table.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
@@ -411,7 +498,7 @@ fn handle_assignment(
             }
             let (instruction, suffix) = get_type_specifiers(size)?;
             let addr_reg = generate_array_access_instructions(
-                left, &mut 0, dimensions.len() as i64, underlying_size, var_table, result_vec, type_map, symbol_table, reg_pool)?;
+                left, &mut 0, dimensions.len() as i64, underlying_size, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?;
             if addr_reg.is_none() {
 
             } else {
@@ -430,7 +517,7 @@ fn handle_assignment(
             reg_pool.release(addr_reg_str.clone());
         },
         Expr::StructAccess(inner, field) => {
-            let address = handle_struct_access(left, var_table, result_vec, type_map, symbol_table, reg_pool)?.unwrap();
+            let address = handle_struct_access(left, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?.unwrap();
             let mut def = get_struct_def(left, var_table, type_map, symbol_table)?;
             let field_type = def.get_field_type(field).unwrap();
             let size = get_size(&field_type, type_map, symbol_table)?;
@@ -456,11 +543,12 @@ fn generate_unary_expression(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     match operator {
-        Operator::Deref => handle_dereference(operand, var_table, result_vec, type_map, symbol_table, reg_pool),
-        Operator::Ref => handle_address_of(operand, var_table, result_vec, type_map, symbol_table, reg_pool),
-        _ => handle_arithmetic_unary(operand, operator, var_table, result_vec, type_map, symbol_table, reg_pool)
+        Operator::Deref => handle_dereference(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack),
+        Operator::Ref => handle_address_of(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack),
+        _ => handle_arithmetic_unary(operand, operator, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
     }
 }
 
@@ -471,6 +559,7 @@ fn handle_address_of(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     let var_name = match operand {
         Expr::VarUsage(name) => name,
@@ -494,8 +583,9 @@ fn handle_dereference(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
-    let addr_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool)?
+    let addr_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
         .ok_or("Dereference requires loaded address")?;
 
     let (size, instruction, suffix) = match get_pointer_base_type(operand, var_table, type_map, symbol_table)? {
@@ -525,8 +615,9 @@ fn handle_arithmetic_unary(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
+    cur_stack: &mut i64
 ) -> Result<Option<String>, String> {
-    let operand_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool)?
+    let operand_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
         .ok_or("Need register for unary operation")?;
 
     match operator {

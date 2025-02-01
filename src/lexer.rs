@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::ast_types::Stmt;
 use crate::codegen::get_size;
 use crate::lexer::FoundLongToken::{Found, NotFound};
 
@@ -91,8 +92,8 @@ impl StructDef {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct  FunDef {
-    FunType: Type,
-    Args: Vec<(String, Type)>
+    pub funType: Type,
+    pub args: Option<Vec<Stmt>>
 }
 
 ///
@@ -214,6 +215,7 @@ pub enum SpecialCharacter {
     LeftSquareBracket,
     RightSquareBracket,
     SemiColon,
+    Comma,
 }
 
 pub struct Lexer;
@@ -331,6 +333,7 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
         '(' => Ok(SpecialCharacter::LeftParenthesis),
         ')' => Ok(SpecialCharacter::RightParenthesis),
         ';' => Ok(SpecialCharacter::SemiColon),
+        ',' => Ok(SpecialCharacter::Comma),
         _ => Err("Illegal special character"),
     }
 }

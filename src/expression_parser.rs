@@ -55,6 +55,7 @@ impl ExpressionParser {
         self.parse_assignment()
     }
 
+
     fn parse_assignment(&mut self) -> Result<Expr, String> {
         println!("{:?} before parsing parsing an assignment", self.peek());
         let lhs = self.parse_logical_or()?;
@@ -243,7 +244,7 @@ impl ExpressionParser {
                 self.consume();
                 // if next token is right paretheses then identifier is function call if not varriable
                 if let Token::SpecialCharacter(SpecialCharacter::LeftParenthesis) = self.peek() {
-                    panic!("function identifiers not supported yet!!!");
+                    self.parse_fn_call(name_clone)
                 } else {
                     Ok(self.crate_variable_node(name_clone)?)
                 }
@@ -265,12 +266,35 @@ impl ExpressionParser {
         }
     }
 
+    fn parse_fn_call(&mut self, name_clone: String) -> Result<Expr, String> {
+        //consume //
+        self.expect(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+        let mut params = Vec::new();
+        loop {
+            //until , expression is parsed as param
+            let param = self.parse_expression()?;
+            params.push(param);
+            //consume comma
+           if let Token::SpecialCharacter(SpecialCharacter::RightParenthesis) = self.consume() {
+               break;
+           };
+        }
+        self.consume();
+        Ok(Self::create_fn_call_node(name_clone, params))
+    }
 
     fn is_l_value(expression: &Expr) -> bool {
         if matches!(expression, Expr::VarUsage(_) | Expr::ArrayAccess(_, _) | Expr::StructAccess(_, _)) {
             return true
         }
         false
+    }
+
+    fn create_fn_call_node(name: String, params: Vec<Expr>) -> Expr {
+        Expr::Function_Call {
+            name,
+            args: params,
+        }
     }
 
     fn create_unary_ast_node(token: Token, operand: Expr) -> Expr {
@@ -298,16 +322,17 @@ impl ExpressionParser {
     }
 
     fn crate_variable_node(&mut self, variable_name: String) -> Result<Expr, String> {
-        let var = self.symbol_table.get(&variable_name).expect("No var declared");
-        match var {
-            SymbolTableEntry::Variable(cur_type) => {
-                Ok(Expr::VarUsage(variable_name))
-            },
-            // SymbolTableEntry::FunDef(..) => {
-            //
-            // }
-            _ => panic!("Unexpected type of idnetifier in expression")
-        }
+        Ok(Expr::VarUsage(variable_name))
+        // let var = self.symbol_table.get(&variable_name).expect("No var declared");
+        // match var {
+        //     SymbolTableEntry::Variable(cur_type) => {
+        //         Ok(Expr::VarUsage(variable_name))
+        //     },
+        //     // SymbolTableEntry::FunDef(..) => {
+        //     //
+        //     // }
+        //     _ => panic!("Unexpected type of idnetifier in expression")
+        // }
 
     }
 }

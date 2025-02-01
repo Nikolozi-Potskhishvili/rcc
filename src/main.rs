@@ -228,4 +228,11 @@ mod tests {
         clean_up_tests_files();
         result.expect("failed");
     }
+
+    #[test]
+    fn test_functions() {
+        let result = test_helper(&*String::from("./test_files/functions/simple_functions.c"), 27);
+        clean_up_tests_files();
+        result.expect("failed");
+    }
 }

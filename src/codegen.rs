@@ -1,11 +1,8 @@
 use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
-use std::env::args;
-use std::fmt::format;
 use std::hash::Hash;
 use std::ops::{Deref};
 use std::rc::Rc;
-use lazy_static::lazy_static;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::expression_codgen::generate_expression_instructions;
 use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
@@ -34,25 +31,30 @@ pub fn generate_assembly(
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
-    let mut global_vars = HashMap::new();
+    let mut global_vars: HashMap<String, Variable> = HashMap::new();
     let mut functions = String::new();
     //Keys are labels and value is number which is written after
     let mut labels : HashMap<String, i32> = HashMap::new();
     let mut stack_ptr = 0;
+    functions += ".intel_syntax noprefix\n";
+    functions += ".section .text\n";
+    functions += &format!(".global {}\n", "main");
     for child in ast_root_nodes {
         match & *child.borrow() {
             Stmt::FnDecl { name, return_type, args, body } => {
                 let mut assembly_fn_name = format!("_{}", name);
                 if name == "main" {
                     assembly_fn_name = "main".to_string();
-                    functions += ".intel_syntax noprefix\n";
-                    functions += ".section .text\n";
-                    functions += &format!(".global {}\n", assembly_fn_name);
                 }
                 functions += &format!("{}:\n", assembly_fn_name);
                 functions += &*"    push rbp\n    mov rbp, rsp\n".to_string();
+                let mut local_vars = HashMap::new();
+                if args.is_some() {
+                    let mut args_clone = args.clone().unwrap().clone();
+                    allocate_fn_args_and_ret(&mut args_clone, return_type, &mut local_vars, type_map, symbol_table, &mut stack_ptr)?;
+                }
                 if let Stmt::Block(ref statements) = *body.borrow() {
-                    functions += &gen_block_rec(statements, &mut global_vars, &mut labels, &mut stack_ptr, type_map, symbol_table)?;
+                    functions += &gen_block_rec(statements, &mut local_vars, &mut labels, &mut stack_ptr, type_map, symbol_table)?;
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
@@ -62,6 +64,49 @@ pub fn generate_assembly(
     //result += &global_vars;
     result += &functions;
     Ok(result)
+}
+
+fn allocate_fn_args_and_ret(
+    args: &mut Vec<Stmt>,
+    return_type: &Type,
+    var_table: &mut HashMap<String, Variable>,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    stack_ptr: &mut i64
+) -> Result<(), String> {
+    //let mut res_vec = Vec::new();
+    let total_size = get_args_total_size(args)?;
+    //res_vec.push(format!("    sub rsp {total_size}"));
+    let mut offset = -16;
+    args.reverse();
+    for arg in  args {
+        if let Stmt::FnParam { param_type, param_name, param_size } = arg {
+            let var = Variable {
+                var_type: param_type.clone(),
+                memory_offset: offset,
+                register: None,
+                defined: false,
+                pointer: false,
+            };
+            offset -= *param_size;
+            var_table.insert(param_name.clone(), var);
+        } else {
+            return Err("".to_string())
+        }
+    }
+    Ok(())
+}
+
+pub fn get_args_total_size(args: &Vec<Stmt>) -> Result<i64, String> {
+    let mut acum = 0;
+    for arg in args {
+        if let Stmt::FnParam{ param_type, param_name, param_size } = arg {
+            acum += param_size;
+        } else {
+            return Err(format!("Invalid stmt: {:?} in fn arg", arg))
+        }
+    }
+    Ok(acum)
 }
 
 /// Generates Assembly instructions for given vector of Ast statements and vars declared in upper scope.
@@ -76,7 +121,6 @@ fn gen_block_rec(
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
 ) -> Result<String, String> {
     let mut result = String::new();
-    let mut local_stack = 0;
     let mut local_vars : Vec<String> = Vec::new();
 
     for stm in statements {
@@ -95,11 +139,11 @@ fn gen_block_rec(
                 result += &*for_loop_instructions;
             },
             Stmt::VarDecl { name, var_type, expr } => {
-                let instructions = allocate_var_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut local_stack, type_map, symbol_table)?;
+                let instructions = allocate_var_on_stack(name, var_type, upper_scope_vars, stack_ptr,  &mut stack_ptr.clone(), type_map, symbol_table)?;
                 local_vars.push(name.clone());
                 result += &instructions;
                 if expr.is_some() {
-                    let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
+                    let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table, stack_ptr)?;
                     result += &instructions;
                     result += "\n";
                 }
@@ -108,7 +152,7 @@ fn gen_block_rec(
                 if expr.is_none() {
                     return Err(format!("No expression is assigned to var: {}", name))
                 }
-                let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
+                let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table, stack_ptr)?;
                 result += &instructions;
             },
 
@@ -116,12 +160,11 @@ fn gen_block_rec(
                 if expr_option.is_none() {
                     return Err("No expression after return".to_string())
                 }
-                let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table)?;
+                let instructions = generate_return_instructions(expr_option.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table, stack_ptr)?;
                 result += &instructions;
-                result += &format!("    add rsp, {}\n", local_stack);
+                result += &format!("    add rsp, {}\n", *stack_ptr);
                 result+= "    mov rsp, rbp\n    pop rbp\n";
                 result += "    ret\n";
-                *stack_ptr -= local_stack;
             }
             _ => {}
         }
@@ -167,7 +210,7 @@ fn generate_for_loop_instructions(
     // is checked every time
     if condition.is_some() {
         let condition_some = condition.clone().unwrap();
-        let reg = generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
+        let reg = generate_expression_instructions(&condition_some, upper_scope_vars, &mut result_vec, type_map, symbol_table, stack_ptr)?;
         if reg.is_none() {
             result_vec.push(String::from("    pop rax"));
             result_vec.push(format!("    test rax, rax"));
@@ -191,7 +234,7 @@ fn generate_for_loop_instructions(
     //result_vec.push(format!("for_inc{last_increment}:"));
     if increment.is_some() {
         let increment_clone = increment.clone().unwrap();
-        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
+        generate_expression_instructions(&increment_clone, upper_scope_vars, &mut result_vec, type_map, symbol_table, stack_ptr)?;
     }
     result_vec.push(format!("    jmp for_beg{last_for}"));
     result_vec.push(format!("for_end{last_end}:"));
@@ -215,14 +258,14 @@ fn generate_for_loop_init_instructions(
             let mut instructions = allocate_var_on_stack(name, var_type, upper_scope_vars, stack_ptr, &mut 0, type_map, symbol_table)?;
             let expr_unwrap = expr.clone().unwrap();
             let mut result_vec = Vec::new();
-            let expr_instructions = generate_expression_instructions(&expr_unwrap ,upper_scope_vars, &mut result_vec, type_map, symbol_table);
+            let expr_instructions = generate_expression_instructions(&expr_unwrap ,upper_scope_vars, &mut result_vec, type_map, symbol_table, stack_ptr);
             instructions += &*result_vec.join("\n");
             addedVars.insert(name.clone());
             Ok(instructions)
         },
         Stmt::VarAssignment {name, expr } => {
             if expr.is_some() {
-                return Ok(store_var_on_stack(name, &expr.clone().unwrap(), upper_scope_vars, type_map, symbol_table)? + "\n")
+                return Ok(store_var_on_stack(name, &expr.clone().unwrap(), upper_scope_vars, type_map, symbol_table, stack_ptr)? + "\n")
             }
             Ok("".to_string())
         },
@@ -263,7 +306,7 @@ fn generate_while_instructions(
     labels.insert("while_end".to_string(), last_end + 1);
 
     result += &*format!("while_beg{}:\n", last_while);
-    let reg = generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, type_map, symbol_table)?;
+    let reg = generate_expression_instructions(condition, upper_scope_vars, &mut result_vec, type_map, symbol_table, global_stack)?;
     result += &*result_vec.join("\n");
     result += "\n";
     if reg.is_none() {
@@ -306,7 +349,7 @@ fn generate_if_else_instructions(
     labels.insert("else_label".to_string(), else_label_number + 1);
     let end_label_number = labels.get("end_label").copied().unwrap_or(0);
     labels.insert("end_label".to_string(), end_label_number + 1);
-    let reg = generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, type_map, symbol_table)?;
+    let reg = generate_expression_instructions(condition, upper_scope_vars,&mut result_vec, type_map, symbol_table, global_stack)?;
     result += &*result_vec.join("\n");
     result += "\n";
     if reg.is_none() {
@@ -354,9 +397,10 @@ fn generate_return_instructions(
     var_table: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    stack_ptr: &mut i64
 ) -> Result<(String), String> {
     let mut instruction_vec = Vec::new();
-    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, type_map, symbol_table)?;
+    let reg= generate_expression_instructions(&expression_root, var_table, &mut instruction_vec, type_map, symbol_table, stack_ptr)?;
     if reg.is_none() {
         instruction_vec.push(String::from("    pop rax"));
     } else {
@@ -404,6 +448,7 @@ fn store_var_on_stack(
     var_table: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    stack_ptr: &mut i64
 ) -> Result<String, String> {
 
     if !var_table.contains_key((var_name)) {
@@ -411,7 +456,7 @@ fn store_var_on_stack(
     }
     let var = var_table.get(var_name).unwrap().clone();
     let mut instruction_vec = Vec::new();
-    generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table)?;
+    generate_expression_instructions(expr, var_table, &mut instruction_vec, type_map, symbol_table, stack_ptr)?;
     Ok(instruction_vec.join("\n") + "\n")
 }
 

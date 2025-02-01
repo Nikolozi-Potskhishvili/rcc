@@ -13,6 +13,11 @@ pub enum Stmt {
         args: Option<Vec<Stmt>>,
         body: Rc<RefCell<Stmt>>
     },
+    FnParam{
+        param_type: Type,
+        param_name: String,
+        param_size: i64,
+    },
     If {
         condition: Expr,
         then_branch: Rc<RefCell<Stmt>>,
