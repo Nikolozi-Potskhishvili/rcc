@@ -73,24 +73,9 @@ fn generate_expression(
             if var.register.is_some() {
                 return Ok(var.register.clone());
             }
-            let instruction = crate::codegen::get_type_instruction(size)?;
-            let suffix = crate::codegen::get_register_suffix(size)?;
+            let (w, s) = get_type_specifiers(size)?;
             let neg_offset = var.memory_offset < 0;
-            if let Some(reg) = reg_pool.allocate() {
-                if neg_offset {
-                    result_vec.push(format!("    mov {}{}, {}[rbp + {}]", reg, suffix, instruction, var.memory_offset.abs()));
-                }  else {
-                    result_vec.push(format!("    mov {}{}, {}[rbp - {}]", reg, suffix, instruction, var.memory_offset));
-                }
-                Ok(Some(reg + suffix.as_str()))
-            } else {
-                if neg_offset {
-                    result_vec.push(format!("    push {}[rbp + {}]", instruction, var.memory_offset.abs()));
-                }  else {
-                    result_vec.push(format!("    push {}[rbp - {}]", instruction, var.memory_offset));
-                }
-                Ok(None)
-            }
+            load_var_in_reg(var.memory_offset, w, s, result_vec, neg_offset, reg_pool)
         },
         Expr::ArrayAccess(inner, ident) => {
             let array_name  = get_array_name_from_access_expr(&current_node)?;
@@ -139,6 +124,50 @@ fn generate_expression(
     }
 }
 
+fn load_var_in_reg(
+    offset: i64,
+    w: &str,
+    s: &str,
+    result_vec: &mut Vec<String>,
+    is_neg: bool,
+    reg_pool: &mut RegisterPool
+) -> Result<Option<String>, String> {
+    if let Some(reg) = reg_pool.allocate() {
+        if s == "" {
+            result_vec.push(format!("    mov {reg}, {w}[rbp - {offset}]"))
+        } else if s == "d" {
+            result_vec.push(format!("    movsxd {reg}, {w}[rbp - {offset}]"))
+        } else {
+            result_vec.push(format!("    movsx {reg}, {w}[rbp - {offset}]"))
+        }
+        Ok(Some(reg))
+    } else {
+        // if is_neg {
+        //     result_vec.push(format!("    push {}[rbp + {}]", instruction, var.memory_offset.abs()));
+        // }  else {
+        //     result_vec.push(format!("    push {}[rbp - {}]", instruction, var.memory_offset));
+        // }
+        Ok(None)
+    }
+}
+
+fn store_var_on_stack(
+    offset: i64,
+    w: &str,
+    s: &str,
+    result_vec: &mut Vec<String>,
+    is_neg: bool,
+    reg: &String,
+)  {
+    if s == "" {
+        result_vec.push(format!("    mov {}[rbp - {}], {}", w, offset, reg));
+    } else if s == "d" {
+        result_vec.push(format!("    mov {}[rbp - {}], {}{s}", w, offset, reg));
+    } else {
+        result_vec.push(format!("    mov {}[rbp - {}], {}{s}", w, offset, reg));
+    }
+
+}
 
 fn handle_fn_call(
     name: &String,
@@ -517,12 +546,9 @@ fn handle_assignment(
             if var.register.is_some() {
                 return Ok(var.register.clone());
             }
-            if let Some(reg) = rhs_reg {
-                result_vec.push(format!("    mov {}[rbp - {}], {}{suffix}", instruction, var.memory_offset, reg));
-                reg_pool.release(reg);
-            } else {
-                result_vec.push(format!("    pop {}[rbp - {}]", instruction, var.memory_offset));
-            }
+            let is_neg = var.memory_offset < 0;
+            let right_reg = rhs_reg.unwrap();
+            store_var_on_stack(var.memory_offset, instruction, suffix, result_vec, is_neg, &right_reg);
         },
         Expr::ArrayAccess(var_expr, indexing_expr) => {
             let mut size ;
@@ -584,19 +610,15 @@ fn handle_assignment(
             let cur_type = get_pointer_base_type(&un.operand.clone(), var_table, type_map, symbol_table)?.unwrap();
             let size = get_size(&cur_type, type_map, symbol_table)?;
             let (w, s) = get_type_specifiers(size)?;
-            let is_neg = pointer_var.memory_offset < 0;
             let reg = reg_pool.allocate().unwrap();
             if pointer_var.register.is_some() {
                 let reg = pointer_var.clone().register.unwrap().clone();
                 let rhs = rhs_reg.unwrap();
-                result_vec.push(format!("    mov {w}[{reg}], {rhs}",));
+                result_vec.push(format!("    mov {w}[{reg}], {rhs}{s}",));
                 return Ok(None)
             }
-            if is_neg {
-                result_vec.push(format!("    mov {reg}, [rbp + {}]",  pointer_var.memory_offset.abs()));
-            } else {
-                result_vec.push(format!("    mov {reg}, [rbp - {}]",  pointer_var.memory_offset));
-            }
+
+            result_vec.push(format!("    mov {reg}, [rbp - {}]",  pointer_var.memory_offset));
             let mut rhs = rhs_reg.unwrap();
             if !has_suffix(&rhs) {
                 rhs += s;
@@ -662,23 +684,25 @@ fn handle_dereference(
     let addr_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
         .ok_or("Dereference requires loaded address")?;
     let base_type = get_pointer_base_type(operand, var_table, type_map, symbol_table)?;
-    let (size, instruction, suffix) = match  base_type {
+    let size = match  base_type {
         Some(t) => {
-            let size = get_size(&t, type_map, symbol_table)?;
-            let instr = crate::codegen::get_type_instruction(size)?;
-            let suf = crate::codegen::get_register_suffix(size)?;
-            (size, instr, suf)
+          get_size(&t, type_map, symbol_table)?
         }
         None => return Err(format!("invalid deref of: {:?}, operand: {:?},", base_type, operand))
     };
-
+    let (w, s) = get_type_specifiers(size)?;
     let value_reg = reg_pool.allocate()
         .ok_or("No registers available for dereference")?;
-
-    result_vec.push(format!("    mov {}{}, {}[{}]", value_reg, suffix, instruction, addr_reg));
+    if s == "" {
+        result_vec.push(format!("    mov {value_reg}, {w}[{addr_reg}]"))
+    } else if s == "d" {
+        result_vec.push(format!("    movsxd {value_reg}, {w}[{addr_reg}]"))
+    } else {
+        result_vec.push(format!("    movsx {value_reg}, {w}[{addr_reg}]"))
+    }
     reg_pool.release(addr_reg);
 
-    Ok(Some(value_reg + suffix.as_str()))
+    Ok(Some(value_reg))
 }
 
 fn handle_arithmetic_unary(
@@ -796,10 +820,10 @@ fn is_logical_operator(operator: &Operator) -> bool {
 
 fn get_type_specifiers(size: i64) -> Result<(&'static str, &'static str), String> {
     match size {
-        1 => Ok(("byte ", "b")),
-        2 => Ok(("word ", "w")),
-        4 => Ok(("dword ", "d")),
-        8 => Ok(("qword ptr ", "")),
+        1 => Ok(("BYTE PTR ", "b")),
+        2 => Ok(("WORD PTR ", "w")),
+        4 => Ok(("DWORD PTR ", "d")),
+        8 => Ok(("QWORD PTR ", "")),
         _ => Err(format!("Unsupported data size: {}", size)),
     }
 }

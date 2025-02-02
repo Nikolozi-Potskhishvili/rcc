@@ -471,13 +471,12 @@ fn store_var_on_stack(
 pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     match cur_type {
         Type::Primitive(name)=> match name.as_str() {
-            // "int" => Ok(4),
-            // "short" => Ok(2),
-            // "long" => Ok(8),
-            // "bool" => Ok(1),
-            // "char" => Ok(1),
-            // _ => return Err(format!("No such type as: {name}")),
-            _ => Ok(8),
+            "int" => Ok(4),
+            "short" => Ok(2),
+            "long" => Ok(8),
+            "bool" => Ok(1),
+            "char" => Ok(1),
+            _ => return Err(format!("No such type as: {name}")),
         },
         Type::Pointer(..) => Ok(8),
         Type::Array(arr_type, size) => {
