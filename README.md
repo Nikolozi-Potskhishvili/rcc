@@ -1,7 +1,7 @@
 # rcc Compiler
 
 ## Overview
-rcc is a lightweight C compiler supporting essential language features, including arithmetic and logical operations, primitive types, one-dimensional arrays, pointers, loops, functions, and structs. It provides a simplified subset of C while maintaining expressive power for low-level programming.
+rcc is a lightweight C compiler to asm x86_64(intel syntax) supporting essential language features, including arithmetic and logical operations, primitive types, one-dimensional arrays, pointers, loops, functions, and structs. It provides a simplified subset of C while maintaining expressive power for low-level programming.
 
 ## Supported Features
 ### **1. Arithmetic and Logical Operations**
