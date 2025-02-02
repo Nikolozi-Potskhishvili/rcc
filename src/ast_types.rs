@@ -7,6 +7,10 @@ pub enum Stmt {
     DummyExpr(Expr),
     VarDecl {name: String, var_type: Type, expr: Option<Expr>},
     VarAssignment {name: String, expr: Option<Expr>},
+    FnCall {
+        name: String,
+        expr: Expr,
+    },
     FnDecl {
         name: String,
         return_type: Type,

@@ -18,7 +18,7 @@ pub fn generate_expression_instructions(
     cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     let free_regs = vec![String::from("r8"), String::from("r9"), String::from("r10"), String::from("r11"),
-    String::from("r12"), String::from("r13"), String::from("r14")];
+    ];
     let mut reg_pool = RegisterPool::new(&*free_regs);
     let mut stack = *cur_stack;
     let res = generate_expression(
@@ -70,7 +70,9 @@ fn generate_expression(
             let var = var_op.unwrap();
             let memory_offset = var.memory_offset;
             let size = get_size(&var.var_type, type_map, symbol_table)?;
-
+            if var.register.is_some() {
+                return Ok(var.register.clone());
+            }
             let instruction = crate::codegen::get_type_instruction(size)?;
             let suffix = crate::codegen::get_register_suffix(size)?;
             let neg_offset = var.memory_offset < 0;
@@ -146,57 +148,76 @@ fn handle_fn_call(
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     reg_pool: &mut RegisterPool,
-    cur_stack: &mut i64
-) ->Result<Option<String>, String> {
-    // allocate space for params, ensure stack is 16 byte alligned and store them
-    let mut allocated = 0;
-    let entry= symbol_table.get(name);
-    let mut args_vec;
-    if let Some(SymbolTableEntry::FunDef(def)) = entry {
-        args_vec = def.args.clone();
-        let fun_args = def.args.clone();
-        if fun_args.is_some() {
-            let total_size = get_args_total_size(&fun_args.unwrap())?;
-            allocated += total_size;
-        } else {
-        }
+    cur_stack: &mut i64  // current additional bytes allocated on the stack
+) -> Result<Option<String>, String> {
+    // Retrieve the function definition from the symbol table.
+    let entry = symbol_table.get(name)
+        .ok_or_else(|| format!("Function {} not found", name))?;
+    let (fun_args, fun_type) = if let SymbolTableEntry::FunDef(def) = entry {
+        // We assume def.args is an Option<Vec<Stmt>> where each statement is a FnParam.
+        (def.args.clone().unwrap_or_else(|| vec![]), def.funType.clone())
     } else {
-        return Err("".to_string())
-    }
-    let mut padding = 0;
-    if (*cur_stack + allocated + 16) % 16 != 0 {
-        padding += 16 - ((*cur_stack + allocated + 16) % 16);
+        return Err(format!("{} is not a function", name));
+    };
 
-    }
-    //allocate
-    result_vec.push(format!("    sub rsp, {}", padding + allocated));
-    let mut param_ptr = padding;
+    // For simplicity, assume every argument is passed on the stack as 8 bytes.
+    let num_args = fun_args.len() as i64;
+    let total_args_size = num_args * 8; // each push uses 8 bytes
+
+    // Compute padding needed so that BEFORE the call, rsp is 16-byte aligned.
+    // When call _fun is executed, the call instruction will push an 8-byte return address.
+    // We want: (cur_stack + total_args_size + 8) % 16 == 0.
+    // let mut padding = 0;
+    // if (*cur_stack + total_args_size + 8) % 16 != 0 {
+    //     padding = 16 - ((*cur_stack + total_args_size + 8) % 16);
+    // }
+    //
+    // // Reserve space for the padding.
+    // if padding > 0 {
+    //     result_vec.push(format!("    sub rsp, {}", padding));
+    //     *cur_stack += padding;
+    // }
+
+    // Evaluate and push the arguments in reverse order.
+    // This way, after pushing, the first argument is closest to the return address.
+    // (That is, inside the callee after "push rbp; mov rbp, rsp", the first argument will be at [rbp+16].)
+    let param_regs = vec!["rdi", "rsi", "rdx", "rcx"];
     for (index, expr) in args.iter().enumerate() {
-        let reg = generate_expression(expr, var_table, result_vec,type_map, symbol_table, reg_pool, cur_stack)?.ok_or("")?;
-        let stmt = args_vec.clone().unwrap().get(index).unwrap().clone();
-        let (cur_type, name, size) = match stmt {
-            Stmt::FnParam { param_type, param_name, param_size } => (param_type, param_name, param_size),
-            _ => return Err("dfsdf".to_string())
-        };
-        let (w, s) = get_type_specifiers(size)?;
-        result_vec.push(format!("    mov {w}[rbp - {}], {reg}", *cur_stack + padding + param_ptr));
-        param_ptr += size;
+        let mut arg_reg = generate_expression(expr, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
+            .ok_or_else(|| format!("Failed to generate argument for expression :{:?}", expr))?;
+        let suffix = get_suffix_char(&arg_reg);
+        if suffix.is_some() {
+            arg_reg.pop();
+            result_vec.push(format!("    movsx {arg_reg}, {arg_reg}{}", suffix.unwrap()))
+        }
+        let res_reg = param_regs.get(index).unwrap();
+        result_vec.push(format!("    mov {res_reg}, {}", arg_reg));
+        //*cur_stack += 8; // each push decrements rsp by 8 bytes
     }
-    //call func
-    result_vec.push(format!("    call _{name}"));
-    result_vec.push(format!("    add rsp, {}", padding + allocated));
-    // load the return value into reg
-    let reg = reg_pool.allocate();
-    if reg.is_none() {
+
+    // Call the function. The call will push the return address (8 bytes).
+    result_vec.push(format!("    call _{}", name));
+
+    // After the call, the pushed arguments (and any padding) remain on the stack.
+    // Remove them by adding the total size back to rsp.
+    // let total_to_remove = total_args_size + padding;
+    // if total_to_remove > 0 {
+    //     result_vec.push(format!("    add rsp, {}", total_to_remove));
+    //     *cur_stack -= total_to_remove;
+    // }
+    if let Type::Void =  fun_type {
+        return Ok(None)
+    }
+    // Retrieve the return value from rax.
+    if let Some(ret_reg) = reg_pool.allocate() {
+        result_vec.push(format!("    mov {}, rax", ret_reg));
+        Ok(Some(ret_reg))
+    } else {
+        // If no register is available, simply pop rax.
         result_vec.push("    pop rax".to_string());
         Ok(None)
-    } else {
-        let reg_un = reg.unwrap();
-        result_vec.push(format!("    mov {}, rax", reg_un));
-        Ok(Some(reg_un))
     }
 }
-
 fn handle_struct_access(
     expression: &Expr,
     var_table: &mut HashMap<String, Variable>,
@@ -235,7 +256,12 @@ fn get_address(
         Expr::VarUsage(name) => {
             let var = var_table.get(name).unwrap();
             let target_reg = reg_pool.allocate().ok_or("")?;
-            result_vec.push(format!("    lea {target_reg}, [rbp - {}]", var.memory_offset));
+            let is_neg = var.memory_offset < 0;
+            if is_neg {
+                result_vec.push(format!("    lea {target_reg}, [rbp + {}]", var.memory_offset.abs()));
+            } else {
+                result_vec.push(format!("    lea {target_reg}, [rbp - {}]", var.memory_offset));
+            }
             Ok(Some(target_reg))
         },
         Expr::ArrayAccess(inner, index) => {
@@ -265,6 +291,13 @@ fn get_address(
             result_vec.push(format!("    add {inner_reg}, {offset}"));
             return Ok(Some(inner_reg))
         },
+        Expr::UnaryExpr(un) => {
+            if un.operator == Operator::Deref {
+                get_address(&un.operand.clone(), var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
+            } else {
+                return Err(format!("Invalid expression type: {:?}, in codgen of address", expression))
+            }
+        }
         _ => return Err(format!("Invalid expression type: {:?}, in codgen of address", expression))
     }
 }
@@ -431,7 +464,9 @@ fn generate_binary_instruction (
         result_vec.push(format!("    pop {}", reg));
         reg
     });
-    if !has_suffix(&temp_reg) {
+    if is_arg_register(&*temp_reg) && left_suf != "" {
+        temp_reg = get_subregister(&temp_reg, &*left_suf).unwrap().parse().unwrap();
+    } else if !has_suffix(&temp_reg) {
         temp_reg += &left_suf;
     }
     if is_logical_operator(&operator) {
@@ -479,9 +514,11 @@ fn handle_assignment(
             let var = var_table.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
             let size = get_size(&var.var_type, type_map, symbol_table)?;
             let (instruction, suffix) = get_type_specifiers(size)?;
-
+            if var.register.is_some() {
+                return Ok(var.register.clone());
+            }
             if let Some(reg) = rhs_reg {
-                result_vec.push(format!("    mov {}[rbp - {}], {}", instruction, var.memory_offset, reg));
+                result_vec.push(format!("    mov {}[rbp - {}], {}{suffix}", instruction, var.memory_offset, reg));
                 reg_pool.release(reg);
             } else {
                 result_vec.push(format!("    pop {}[rbp - {}]", instruction, var.memory_offset));
@@ -537,9 +574,35 @@ fn handle_assignment(
 
         }
         // handle *x = ...
-        // Expr::UnaryExpr(un) => {
-        //     get_address()
-        // }
+        Expr::UnaryExpr(un) => {
+            //let reg = get_address(&left,var_table, result_vec, type_map, symbol_table,reg_pool, cur_stack)?.unwrap();
+            let var_name = match un.operand.as_ref() {
+                Expr::VarUsage(name) => name,
+                _ => return Err("Cannot deref anything except one level pointer".to_string())
+            };
+            let pointer_var = var_table.get(var_name).unwrap();
+            let cur_type = get_pointer_base_type(&un.operand.clone(), var_table, type_map, symbol_table)?.unwrap();
+            let size = get_size(&cur_type, type_map, symbol_table)?;
+            let (w, s) = get_type_specifiers(size)?;
+            let is_neg = pointer_var.memory_offset < 0;
+            let reg = reg_pool.allocate().unwrap();
+            if pointer_var.register.is_some() {
+                let reg = pointer_var.clone().register.unwrap().clone();
+                let rhs = rhs_reg.unwrap();
+                result_vec.push(format!("    mov {w}[{reg}], {rhs}",));
+                return Ok(None)
+            }
+            if is_neg {
+                result_vec.push(format!("    mov {reg}, [rbp + {}]",  pointer_var.memory_offset.abs()));
+            } else {
+                result_vec.push(format!("    mov {reg}, [rbp - {}]",  pointer_var.memory_offset));
+            }
+            let mut rhs = rhs_reg.unwrap();
+            if !has_suffix(&rhs) {
+                rhs += s;
+            }
+            result_vec.push(format!("    mov {w}[{reg}], {}", rhs))
+        }
         _ => return Err("Invalid left-hand side in assignment".to_string())
     };
 
@@ -598,15 +661,15 @@ fn handle_dereference(
 ) -> Result<Option<String>, String> {
     let addr_reg = generate_expression(operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
         .ok_or("Dereference requires loaded address")?;
-
-    let (size, instruction, suffix) = match get_pointer_base_type(operand, var_table, type_map, symbol_table)? {
+    let base_type = get_pointer_base_type(operand, var_table, type_map, symbol_table)?;
+    let (size, instruction, suffix) = match  base_type {
         Some(t) => {
             let size = get_size(&t, type_map, symbol_table)?;
             let instr = crate::codegen::get_type_instruction(size)?;
             let suf = crate::codegen::get_register_suffix(size)?;
             (size, instr, suf)
         }
-        None => return Err("Dereferencing non-pointer type".to_string())
+        None => return Err(format!("invalid deref of: {:?}, operand: {:?},", base_type, operand))
     };
 
     let value_reg = reg_pool.allocate()
@@ -665,7 +728,7 @@ fn get_pointer_base_type(
         Expr::UnaryExpr(UnaryExpr { operator: Operator::Ref, operand }) => {
             get_expression_type(operand, var_table, type_map, symbol_table)
         }
-        _ => Err("Complex pointer expressions not supported".to_string())
+        _ => Err(format!("Complex pointer expressions not supported, {:?}", expr))
     }
 }
 
@@ -763,5 +826,37 @@ fn get_struct_def_by_type(
             }
         }
         _ => Err(format!("Expected struct type, but got: {:?}", cur_type)),
+    }
+}
+
+fn get_subregister(register: &str, suffix: &str) -> Option<&'static str> {
+    match (register, suffix) {
+        ("rdi", "b") => Some("dil"),  // Lower 8 bits of rdi
+        ("rdi", "w") => Some("di"),   // Lower 16 bits of rdi
+        ("rdi", "d") => Some("edi"),  // Lower 32 bits of rdi
+        ("rdi", "r") => Some("rdi"),  // Full 64 bits of rdi
+
+        ("rsi", "b") => Some("sil"),  // Lower 8 bits of rsi
+        ("rsi", "w") => Some("si"),   // Lower 16 bits of rsi
+        ("rsi", "d") => Some("esi"),  // Lower 32 bits of rsi
+        ("rsi", "r") => Some("rsi"),  // Full 64 bits of rsi
+
+        ("rdx", "b") => Some("dl"),   // Lower 8 bits of rdx
+        ("rdx", "w") => Some("dx"),   // Lower 16 bits of rdx
+        ("rdx", "d") => Some("edx"),  // Lower 32 bits of rdx
+        ("rdx", "r") => Some("rdx"),  // Full 64 bits of rdx
+
+        ("rcx", "b") => Some("cl"),   // Lower 8 bits of rcx
+        ("rcx", "w") => Some("cx"),   // Lower 16 bits of rcx
+        ("rcx", "d") => Some("ecx"),  // Lower 32 bits of rcx
+        ("rcx", "r") => Some("rcx"),  // Full 64 bits of rcx
+
+        _ => None, // Return None if the combination doesn't match
+    }
+}
+fn is_arg_register(register: &str) -> bool {
+    match register {
+        "rdi" | "rsi" | "rdx" | "rcx"  => true,
+        _ => false,
     }
 }

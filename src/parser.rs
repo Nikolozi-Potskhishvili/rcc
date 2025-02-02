@@ -506,6 +506,14 @@ fn handle_identifier_usage(
 
             parse_type_declaration(token_iter, type_map, symbol_table, &mut cur_type.clone())
         }
+        //handle fun call
+        SymbolTableEntry::FunDef(fun_def) => {
+            let expression = parse_expression(token_iter, type_map, symbol_table)?;
+            Ok(Rc::new(RefCell::new(Stmt::FnCall {
+                name: name.clone(),
+                expr: expression,
+            })))
+        }
         _ => return Err(format!("Invalid type of identifier:{:?} during parsing", entry)),
     }
 
@@ -872,3 +880,5 @@ pub fn print_ast(root_nodes: &Vec<Rc<RefCell<Stmt>>>) {
 fn get_array_total_size(array_type: &Type) -> i64 {
     0
 }
+
+

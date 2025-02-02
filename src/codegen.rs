@@ -11,7 +11,7 @@ use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
 pub struct Variable {
     pub(crate) var_type: Type,
     pub(crate) memory_offset: i64,
-    register: Option<String>,
+    pub register: Option<String>,
     defined: bool,
     pointer: bool,
 }
@@ -38,7 +38,8 @@ pub fn generate_assembly(
     let mut stack_ptr = 0;
     functions += ".intel_syntax noprefix\n";
     functions += ".section .text\n";
-    functions += &format!(".global {}\n", "main");
+    //functions += &format!(".global _start\n_start:\n    call main\n    mov rdi, rax\n    mov rax 60\n    syscall\n");
+    functions += ".global main\n";
     for child in ast_root_nodes {
         match & *child.borrow() {
             Stmt::FnDecl { name, return_type, args, body } => {
@@ -55,6 +56,9 @@ pub fn generate_assembly(
                 }
                 if let Stmt::Block(ref statements) = *body.borrow() {
                     functions += &gen_block_rec(statements, &mut local_vars, &mut labels, &mut stack_ptr, type_map, symbol_table)?;
+                }
+                if let Type::Void = return_type {
+                    functions += "    mov rsp, rbp\n    pop rbp\n    ret\n";
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
@@ -74,21 +78,21 @@ fn allocate_fn_args_and_ret(
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
     stack_ptr: &mut i64
 ) -> Result<(), String> {
-    //let mut res_vec = Vec::new();
-    let total_size = get_args_total_size(args)?;
-    //res_vec.push(format!("    sub rsp {total_size}"));
+    // 8 for return adress 8 for pushed old rbp
     let mut offset = -16;
-    args.reverse();
-    for arg in  args {
+    let param_regs = vec!["rdi", "rsi", "rdx", "rcx"];
+    if args.len() > 4 {
+        return Err(String::from("Funcions with more that 4 params are not supported"))
+    }
+    for (i, arg) in  args.iter().enumerate() {
         if let Stmt::FnParam { param_type, param_name, param_size } = arg {
             let var = Variable {
                 var_type: param_type.clone(),
-                memory_offset: offset,
-                register: None,
+                memory_offset: -1,
+                register: Some(param_regs.get(i).unwrap().to_string()),
                 defined: false,
                 pointer: false,
             };
-            offset -= *param_size;
             var_table.insert(param_name.clone(), var);
         } else {
             return Err("".to_string())
@@ -155,7 +159,11 @@ fn gen_block_rec(
                 let instructions = store_var_on_stack(name, expr.as_ref().unwrap(), upper_scope_vars, type_map, symbol_table, stack_ptr)?;
                 result += &instructions;
             },
-
+            Stmt::FnCall {name, expr} => {
+                let mut vec = Vec::new();
+                generate_expression_instructions(expr, upper_scope_vars, &mut vec, type_map, symbol_table, stack_ptr)?;
+                result += &*(vec.join("\n") + "\n");
+            }
             Stmt::Return(expr_option) => {
                 if expr_option.is_none() {
                     return Err("No expression after return".to_string())
@@ -360,11 +368,11 @@ fn generate_if_else_instructions(
         let reg_unwrap = reg.unwrap();
         result += format!("\n    cmp {reg_unwrap}, 1\n    je if_label{}\n", if_label_number).as_str();
     }
-    //result += &*pop_into_reg_instruction(8);
     if else_branch.is_some() {
         result += format!("    jmp else_label{}\n", else_label_number).as_str();
     }
 
+    result += format!("\n    jmp end_label{}\n", end_label_number).as_str();
     let then_block = match *then_branch.borrow() {
         Stmt::Block(ref vec) => {
             vec.clone()
@@ -374,7 +382,6 @@ fn generate_if_else_instructions(
     result += format!("if_label{}:\n", if_label_number).as_str();
     let then_instructions = gen_block_rec(&then_block, upper_scope_vars, labels, global_stack, type_map, symbol_table)?;
     result += &*then_instructions;
-    result += format!("\n    jmp end_label{}\n", end_label_number).as_str();;
 
     if let Some(else_branch_deref) = else_branch.as_ref() {
         result += format!("else_label{}:\n", else_label_number).as_str();
@@ -464,12 +471,13 @@ fn store_var_on_stack(
 pub fn get_size(cur_type: &Type, type_map: &HashMap<String, Type>, symbol_table: &mut HashMap<String, SymbolTableEntry>) -> Result<i64, String> {
     match cur_type {
         Type::Primitive(name)=> match name.as_str() {
-            "int" => Ok(4),
-            "short" => Ok(2),
-            "long" => Ok(8),
-            "bool" => Ok(1),
-            "char" => Ok(1),
-            _ => return Err(format!("No such type as: {name}")),
+            // "int" => Ok(4),
+            // "short" => Ok(2),
+            // "long" => Ok(8),
+            // "bool" => Ok(1),
+            // "char" => Ok(1),
+            // _ => return Err(format!("No such type as: {name}")),
+            _ => Ok(8),
         },
         Type::Pointer(..) => Ok(8),
         Type::Array(arr_type, size) => {

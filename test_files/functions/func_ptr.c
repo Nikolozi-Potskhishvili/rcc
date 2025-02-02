@@ -5,5 +5,6 @@ void add(int* x, int y) {
 int main() {
     int ptr = 10;
     int addition = 13;
-    return add(&ptr, addition);
+    add(&ptr, addition);
+    return ptr;
 }

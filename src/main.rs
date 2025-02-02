@@ -234,8 +234,9 @@ mod tests {
         let files = vec![
             String::from("./test_files/functions/func_ptr.c"),
             String::from("./test_files/functions/simple_functions.c"),
+            String::from("./test_files/functions/recursive_fn.c"),
         ];
-        let values = vec![23, 27];
+        let values = vec![23, 27, 10];
         for (index, file) in files.iter().enumerate() {
             let result = test_helper(file, *values.get(index).unwrap());
             clean_up_tests_files();
