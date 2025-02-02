@@ -627,6 +627,9 @@ fn parse_function_declaration(
     // Expect parentheses `()` and '{'
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
     let args = parse_args(token_iter, type_map, symbol_table)?;
+    if args.clone().unwrap().len() > 4 {
+        return Err(String::from("Functions with args > than 4 are not supported yet"))
+    }
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftCurlyBracket))?;
 
     let function_statements = parse_scope_tokens(token_iter, type_map, symbol_table)?;
