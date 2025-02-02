@@ -239,25 +239,40 @@ impl Lexer {
 }
 /// this function parses string which certainly contains at least one token
 fn parse_token_helper(s: &str) -> Vec<Token> {
-    let (mut tokens, cur_token, mut open_parentheses) = s.chars()
-        .fold(
-            (Vec::new(), String::new(), 0),
-            |(mut tokens, mut cur_token, mut open_parentheses), char| {
-                if let Ok(operator) = get_operator(&char.to_string()) {
-                    tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
-                    cur_token.clear();
-                    tokens.push(Token::Operator(operator));
-                } else if let Ok(special_symbol) = get_special_symbol(&char.to_string()) {
-                   tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
-                   cur_token.clear();
-                   tokens.push(Token::SpecialCharacter(special_symbol));
-                } else {
-                    cur_token.push(char);
+    let mut chars = s.chars().peekable();
+    let mut tokens = Vec::new();
+    let mut cur_token = String::new();
+    let mut open_parentheses = 0;
+
+    while let Some(&ch) = chars.peek() {
+        if let Ok(_) = get_operator(&ch.to_string()) {
+            // Check for two-character operators
+            let mut op = ch.to_string();
+            chars.next(); // Consume first character
+
+            if let Some(&next_ch) = chars.peek() {
+                let possible_op = format!("{op}{next_ch}");
+                if get_operator(&possible_op).is_ok() {
+                    op = possible_op;
+                    chars.next(); // Consume second character
                 }
-                (tokens, cur_token, open_parentheses)
-            });
-        tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
-        tokens
+            }
+
+            tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+            cur_token.clear();
+            tokens.push(Token::Operator(get_operator(&op).unwrap()));
+        } else if let Ok(special_symbol) = get_special_symbol(&ch.to_string()) {
+            tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+            cur_token.clear();
+            tokens.push(Token::SpecialCharacter(special_symbol));
+            chars.next(); // Consume special symbol
+        } else {
+            cur_token.push(ch);
+            chars.next(); // Consume character
+        }
+    }
+    tokens = process_long_token(&cur_token, tokens, &mut open_parentheses).get_tokens();
+    tokens
 }
 
 
@@ -368,9 +383,19 @@ fn get_operator(token: &str) -> Result<Operator, String> {
         ">" => Ok(Operator::More),
         "&" => Ok(Operator::Ref),
         "." => Ok(Operator::StructAccess),
+        "->" => Ok(Operator::StructPtrAccess),
+        "==" => Ok(Operator::Equal),
+        "!=" => Ok(Operator::NotEqual),
+        ">=" => Ok(Operator::MoreEqual),
+        "<=" => Ok(Operator::LessEqual),
+        "||" => Ok(Operator::Or),
+        "&&" => Ok(Operator::And),
+        "+=" => Ok(Operator::IncrementAssign),
+        "-=" => Ok(Operator::DecrementAssign),
         _ => Err(String::from("unexpected error during parsing operator")),
     }
 }
+
 
 fn is_const_integer(token: &str) -> bool {
     if let Ok(_) = token.to_string().parse::<i32>() {

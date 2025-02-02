@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::iter;
+use std::collections::{HashMap, HashSet};
+use std::env::set_current_dir;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::codegen::{get_args_total_size, get_array_access_depth, get_array_dimensions, get_array_underlying_size, get_size, get_suffix_char, has_suffix, Variable};
 use crate::lexer::{Constant, FunDef, Operator, StructDef, StructField, SymbolTableEntry, Type};
@@ -18,6 +18,7 @@ pub fn generate_expression_instructions(
     cur_stack: &mut i64,
 ) -> Result<Option<String>, String> {
     let free_regs = vec![String::from("r8"), String::from("r9"), String::from("r10"), String::from("r11"),
+                         String::from("r12"), String::from("r13"),
     ];
     let mut reg_pool = RegisterPool::new(&*free_regs);
     let mut stack = *cur_stack;
@@ -108,11 +109,9 @@ fn generate_expression(
             Ok(Some(value_reg))
         },
         Expr::StructAccess(inner, field) => {
-            let res = handle_struct_access(current_node, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack).unwrap().ok_or("")?;
+            let (res, cur_type) = generate_struct_address(current_node, var_table,  type_map, symbol_table, reg_pool, result_vec, cur_stack)?;
             let target_reg = reg_pool.allocate().ok_or("No registers available")?;
-            let mut struct_def = get_struct_def(inner, var_table, type_map, symbol_table)?;
-            let field_offset =  struct_def.get_field_offset(field);
-            let size = get_size(&struct_def.get_field_type(field).unwrap(), type_map, symbol_table)?;
+            let size = get_size(&cur_type, type_map, symbol_table)?;
             let (w, s) = get_type_specifiers(size)?;
             result_vec.push(format!("    mov {target_reg}{s}, {w}[{res}]"));
             Ok(Some(target_reg))
@@ -247,30 +246,6 @@ fn handle_fn_call(
         Ok(None)
     }
 }
-fn handle_struct_access(
-    expression: &Expr,
-    var_table: &mut HashMap<String, Variable>,
-    result_vec: &mut Vec<String>,
-    type_map: &HashMap<String, Type>,
-    symbol_table: &mut HashMap<String, SymbolTableEntry>,
-    reg_pool: &mut RegisterPool,
-    cur_stack: &mut i64
-) -> Result<Option<String>, String> {
-    if let Expr::StructAccess(inner, field) = expression {
-        // calculate inner offset
-        let base = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
-            .ok_or("Failed to generate struct base address")?;
-        // get offset of the field
-        let target_reg = reg_pool.allocate().ok_or("No registers available")?;
-        let mut struct_def = get_struct_def(inner, var_table, type_map, symbol_table)?;
-        let field_offset =  struct_def.get_field_offset(field);
-        result_vec.push(format!("    lea {}, [{} + {}]", target_reg, base, field_offset));
-        reg_pool.release(base);
-        Ok(Some(target_reg))
-    } else {
-        Err("Not a struct access expression".to_string())
-    }
-}
 
 fn get_address(
     expression: &Expr,
@@ -283,17 +258,19 @@ fn get_address(
 ) -> Result<Option<String>, String> {
     match expression {
         Expr::VarUsage(name) => {
-            let var = var_table.get(name).unwrap();
-            let target_reg = reg_pool.allocate().ok_or("")?;
-            let is_neg = var.memory_offset < 0;
-            if is_neg {
-                result_vec.push(format!("    lea {target_reg}, [rbp + {}]", var.memory_offset.abs()));
+            let var = var_table.get(name)
+                .ok_or_else(|| format!("Variable '{}' not found", name))?;
+            let target_reg = reg_pool.allocate().ok_or("No register available")?;
+            // Generate code that loads the variable’s address from rbp,
+            // taking care of whether the offset is negative or not.
+            if var.memory_offset < 0 {
+                result_vec.push(format!("    lea {}, [rbp + {}]", target_reg, var.memory_offset.abs()));
             } else {
-                result_vec.push(format!("    lea {target_reg}, [rbp - {}]", var.memory_offset));
+                result_vec.push(format!("    lea {}, [rbp - {}]", target_reg, var.memory_offset));
             }
             Ok(Some(target_reg))
         },
-        Expr::ArrayAccess(inner, index) => {
+        Expr::ArrayAccess(inner, _index) => {
             let array_name  = get_array_name_from_access_expr(&expression)?;
             let array_type = &var_table.get(&array_name).unwrap().var_type;
             let underlying_size = get_array_underlying_size(&array_type, type_map, symbol_table)?;
@@ -310,64 +287,88 @@ fn get_address(
                 reg_pool,
                 cur_stack,
             )?.ok_or("Array access failed")?;
-
             Ok(Some(addr_reg))
         },
         Expr::StructAccess(inner, field) => {
-            let inner_reg = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?.ok_or("")?;
-            let mut def = get_struct_def(expression, var_table, type_map, symbol_table)?;
+            // Get the base address for the inner struct expression.
+            let base_reg = get_address(inner, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?
+                .ok_or("Failed to get base address for struct access")?;
+            // Get the struct definition for the inner expression
+            let mut def = get_struct_def(inner, var_table, type_map, symbol_table)?.unwrap();
+            // Obtain the offset for the desired field.
             let offset = def.get_field_offset(field);
-            result_vec.push(format!("    add {inner_reg}, {offset}"));
-            return Ok(Some(inner_reg))
+            // Generate code that adds the field offset to the base address.
+            result_vec.push(format!("    add {}, {}", base_reg, offset));
+            // Return the register holding the address of the field.
+            Ok(Some(base_reg))
         },
         Expr::UnaryExpr(un) => {
             if un.operator == Operator::Deref {
-                get_address(&un.operand.clone(), var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
+                get_address(&un.operand, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)
             } else {
-                return Err(format!("Invalid expression type: {:?}, in codgen of address", expression))
+                Err(format!("Invalid expression type in get_address: {:?}", expression))
             }
-        }
-        _ => return Err(format!("Invalid expression type: {:?}, in codgen of address", expression))
+        },
+        _ => Err(format!("Invalid expression type in get_address: {:?}", expression)),
     }
 }
 
-fn get_struct_def(
+fn get_upper_def(
     expression: &Expr,
     var_table: &mut HashMap<String, Variable>,
     type_map: &HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>,
-) -> Result<StructDef, String> {
+) -> Result<Option<StructDef>, String> {
     match expression {
         Expr::VarUsage(name) => {
             let var = var_table.get(name)
                 .ok_or_else(|| format!("Variable '{}' not found", name))?;
-            let struct_def = get_struct_def_by_type(&var.var_type.clone(), var_table, type_map, symbol_table)?;
-            Ok(struct_def)
-        }
+            Ok(Some(get_struct_def_by_type(&var.var_type.clone(), var_table, type_map, symbol_table)?))
+        },
+        // Expr::UnaryExpr(UnaryExpr { operator, operand }) => {
+        //
+        // },
         // Expr::ArrayAccess(inner, _) => {
         //     let inner_type = get_struct_def(inner, var_table, type_map, symbol_table)?;
         //     if let Type::Array(of_type, _) = inner_type {
-        //         Ok(*of_type)
+        //         Ok(of_type.clone())
         //     } else {
         //         Err("Array access on non-array type".to_string())
         //     }
         // }
         Expr::StructAccess(inner, field) => {
             let parent_def = get_struct_def(inner, var_table, type_map, symbol_table)?;
-            let struct_name = parent_def.name;
-                let symbol_table_entry = symbol_table.get(&struct_name)
-                    .ok_or_else(|| format!("Struct '{}' not defined", struct_name))?;
-                let def = match symbol_table_entry {
-                    SymbolTableEntry::StructDef(def_str) => {
-                        def_str.clone()
+            let unwrapped = parent_def.unwrap();
+            let struct_name = unwrapped.name.clone();
+
+            // Retrieve struct definition from symbol table
+            let symbol_table_entry = symbol_table.get(&struct_name)
+                .ok_or_else(|| format!("Struct '{}' not defined", struct_name))?;
+
+            let struct_def = match symbol_table_entry {
+                SymbolTableEntry::StructDef(def) => def,
+                _ => return Err(format!("'{}' is not a struct", struct_name)),
+            };
+            // Find the field in the struct and get its type
+            if let Some(cur_field) = struct_def.fields.iter().find(|cur_field| cur_field.name == *field) {
+                let cur_type = &cur_field.field_type;
+
+                // Find the type name in `type_map`
+                let type_name = type_map.iter()
+                    .find(|(_, t)| t == &cur_type)
+                    .map(|(key, _)| key.clone());
+
+                if let Some(type_name) = type_name {
+                    // Lookup the struct definition in the symbol table
+                    if let Some(SymbolTableEntry::StructDef(struct_def)) = symbol_table.get(&type_name) {
+                        return Ok(Some(struct_def.clone()));
                     }
-                    _ => return Err("lol".to_string())
-                };
-                let struct_fields = def.fields.clone();
-                struct_fields.iter()
-                        .find(|(cur_field)| &cur_field.name == field)
-                        .map(|(cur_field)| def.clone())
-                        .ok_or_else(|| format!("Field '{}' not found in struct '{}'", field, struct_name))
+                }
+                return Ok(None)
+            } else {
+                Err(format!("Field '{}' not found in struct '{:?}'", field, struct_name))
+            }
+
         }
         _ => Err("Invalid expression type for struct access".to_string())
     }
@@ -587,17 +588,13 @@ fn handle_assignment(
             reg_pool.release(addr_reg_str.clone());
         },
         Expr::StructAccess(inner, field) => {
-            let address = handle_struct_access(left, var_table, result_vec, type_map, symbol_table, reg_pool, cur_stack)?.unwrap();
-            let mut def = get_struct_def(left, var_table, type_map, symbol_table)?;
-            let field_type = def.get_field_type(field).unwrap();
-            let size = get_size(&field_type, type_map, symbol_table)?;
+            let (reg_cur, upper_type) = generate_struct_address(left, var_table, type_map, symbol_table, reg_pool, result_vec, cur_stack)?;
+            let size = get_size(&upper_type, type_map, symbol_table)?;
             let (w, s) = get_type_specifiers(size)?;
             if let Some(reg) = rhs_reg {
-                result_vec.push(format!("    mov {w}[{}], {}{s}", address, reg));
+                result_vec.push(format!("    mov {w}[{}], {}{s}", reg_cur, reg));
                 reg_pool.release(reg);
-            } else {
             }
-
         }
         // handle *x = ...
         Expr::UnaryExpr(un) => {
@@ -630,6 +627,173 @@ fn handle_assignment(
 
     Ok(None)
 }
+fn get_struct_def(
+    expr: &Expr,
+    var_table: &HashMap<String, Variable>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, SymbolTableEntry>,
+) -> Result<Option<StructDef>, String> {
+    /// Resolves type through pointers, arrays, and type aliases
+    fn resolve_type(mut ty: Type, type_map: &HashMap<String, Type>) -> Type {
+        let mut visited_names = HashSet::new(); // Track visited type names
+
+        loop {
+            match &ty {
+                Type::Pointer(inner) => ty = *inner.clone(),
+                Type::Array(inner, _) => ty = *inner.clone(),
+                Type::Struct(name) | Type::Primitive(name) => {
+                    // Check for cyclic type definitions
+                    if !visited_names.insert(name.clone()) {
+                        break; // Break if we've already seen this type
+                    }
+
+                    if let Some(aliased) = type_map.get(name) {
+                        ty = aliased.clone();
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        ty
+    }
+    /// Recursively gets the base type of an expression
+    fn get_base_type(
+        expr: &Expr,
+        var_table: &HashMap<String, Variable>,
+        type_map: &HashMap<String, Type>,
+    ) -> Result<Type, String> {
+        match expr {
+            Expr::VarUsage(name) => {
+                let var = var_table.get(name)
+                    .ok_or_else(|| format!("Undefined variable: {}", name))?;
+                Ok(resolve_type(var.var_type.clone(), type_map))
+            }
+
+            Expr::StructAccess(inner, field) => {
+                let base_type = get_base_type(inner, var_table, type_map)?;
+                if let Type::Struct(name) = base_type {
+                    Ok(Type::Struct(name))  // Return parent struct type
+                } else {
+                    Err(format!("Cannot access field '{}' on non-struct type", field))
+                }
+            }
+
+            Expr::ArrayAccess(inner, _) => {
+                let base_type = get_base_type(inner, var_table, type_map)?;
+                if let Type::Array(element_type, _) = base_type {
+                    Ok(*element_type)
+                } else {
+                    Err("Array access on non-array type".into())
+                }
+            }
+
+            Expr::UnaryExpr(unary) if unary.operator == Operator::Deref => {
+                let base_type = get_base_type(&unary.operand, var_table, type_map)?;
+                if let Type::Pointer(pointee_type) = base_type {
+                    Ok(*pointee_type)
+                } else {
+                    Err("Dereferencing non-pointer type".into())
+                }
+            }
+
+            _ => Err("Unsupported expression type for struct resolution".into()),
+        }
+    }
+
+    // Main logic
+    let base_type = get_base_type(expr, var_table, type_map)?;
+
+    if let Type::Struct(struct_name) = base_type {
+        symbol_table
+            .get(&struct_name)
+            .and_then(|entry| match entry {
+                SymbolTableEntry::StructDef(def) => Some(def.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| format!("Undefined struct: {}", struct_name))
+            .map(Some)
+    } else {
+        Ok(None)
+    }
+}
+fn generate_struct_address(
+    expr: &Expr,
+    var_table: &HashMap<String, Variable>,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &HashMap<String, SymbolTableEntry>,
+    reg_pool: &mut RegisterPool,
+    output: &mut Vec<String>,
+    cur_stack: &mut i64
+) -> Result<(String, Type), String> {
+    fn inner_generator(
+        expr: &Expr,
+        var_table: &HashMap<String, Variable>,
+        type_map: &HashMap<String, Type>,
+        symbol_table: &HashMap<String, SymbolTableEntry>,
+        reg_pool: &mut RegisterPool,
+        output: &mut Vec<String>,
+        cur_stack: &mut i64,
+        base_offset: i64
+    ) -> Result<(String, Type, i64), String> {
+        match expr {
+            Expr::StructAccess(inner, field_name) => {
+                // Recursively process inner expression
+                let (mut base_reg, mut inner_type, offset) = inner_generator(
+                    inner,
+                    var_table,
+                    type_map,
+                    symbol_table,
+                    reg_pool,
+                    output,
+                    cur_stack,
+                    base_offset
+                )?;
+
+                // Find field offset
+                let struct_name = match inner_type {
+                    Type::Struct(name) => name,
+                    _ => return Err("".to_string())
+                };
+                let struct_def = symbol_table.get(&struct_name).unwrap();
+                let def = match struct_def {
+                    SymbolTableEntry::StructDef(d) => d,
+                    _ => return Err("dfdfsf".to_string()),
+                };
+
+                Ok((base_reg, def.clone().get_field_type(field_name).unwrap(), offset + def.clone().get_field_offset(field_name)))
+            }
+            Expr::VarUsage(name) => {
+                // Base case - get initial address
+                let base_reg = reg_pool.allocate().ok_or("No registers available")?;
+                let var = var_table.get(name).unwrap();
+                output.push(format!("    lea {base_reg}, [rbp - {}]", var.memory_offset));
+                //output.push(format!("    mov {}, {}", base_reg, base_reg));
+                Ok((base_reg, var.var_type.clone(), 0))
+            }
+            _ => return Err("".to_string())
+        }
+    }
+
+    let (base_reg, upper_type,total_offset) = inner_generator(
+        expr,
+        var_table,
+        type_map,
+        symbol_table,
+        reg_pool,
+        output,
+        cur_stack,
+        0
+    )?;
+
+    if total_offset != 0 {
+        output.push(format!("    lea {}, [{}{:+}]", base_reg, base_reg, total_offset));
+    }
+
+    Ok((base_reg, upper_type))
+}
+
 
 fn generate_unary_expression(
     operand: &Expr,

@@ -1,19 +1,17 @@
-typedef struct a {
+typedef struct inner {
     int x;
     int y;
-} a;
+} inner;
 
-typedef struct b {
-    long i;
-    a j;
-}
+typedef struct outer {
+    long n;
+    inner i;
+} outer;
 
 int main() {
-    a newa;
-    a.x = 10
-    a.y = 11;
-
-    b newb;
-    newb.i = 10;
-    newb.j = newa;
+    outer var;
+    var.n = 10;
+    var.i.x = 11;
+    var.i.y = 12;
+    return var.n + var.i.y;
 }

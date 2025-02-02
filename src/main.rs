@@ -213,7 +213,7 @@ mod tests {
         ];
         let expected_values = vec![5, 6, 10, 10];
         for (index, file) in files.iter().enumerate(){
-            if index == 1 {
+            if index == 2 {
                 break;
             }
             let result = test_helper(file, *expected_values.get(index).unwrap());
@@ -224,9 +224,22 @@ mod tests {
 
     #[test]
     fn test_structs() {
-        let result = test_helper(&*String::from("./test_files/structs/basic_struct.c"), 5);
-        clean_up_tests_files();
-        result.expect("failed");
+        let files = vec![ String::from("./test_files/structs/basic_struct.c"),
+                          String::from("./test_files/structs/nested_struct.c"),
+                          String::from("./test_files/structs/recursive_struct.c"),
+        ];
+        let expected_values = vec![5, 22, 10];
+        for (index, file) in files.iter().enumerate() {
+            // if index != 1 {
+            //     continue;
+            // }
+            // // if index > 0 {
+            // //     break
+            // // }
+            let result = test_helper(file, *expected_values.get(index).unwrap());
+            clean_up_tests_files();
+            result.expect("failed");
+        }
     }
 
     #[test]

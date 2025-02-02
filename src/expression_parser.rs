@@ -63,12 +63,22 @@ impl ExpressionParser {
         if is_l {
             loop {
                 match self.peek() {
-                    Token::Operator(Operator::Assign) | Token::Operator(Operator::IncrementAssign)
-                    | Token::Operator(Operator::DecrementAssign) => {
+                    Token::Operator(Operator::Assign) => {
                         let operator = self.consume();
                         let rhs = self.parse_assignment()?;
-                        return Ok(Self::create_binary_ast_node(operator, lhs, rhs));
+                        return Ok(Self::create_binary_ast_node(operator, lhs, rhs))
                     },
+                    Token::Operator(Operator::IncrementAssign) => {
+                        self.consume();
+                        let assign = Token::Operator(Operator::Assign);
+                        let plus = Token::Operator(Operator::Plus);
+                        let rhs = self.parse_assignment()?;
+                        let inc_node = Self::create_binary_ast_node(plus, rhs, lhs.clone());
+                        return Ok(Self::create_binary_ast_node(assign, lhs, inc_node))
+                    }
+                    Token::Operator(Operator::DecrementAssign) => {
+
+                    }
                     _ => break,
                 }
             }
@@ -229,6 +239,18 @@ impl ExpressionParser {
                         return Err(format!("Expected identifier after '.', found {:?}", identifier_token));
                     }
                 },
+                Token::Operator(Operator::StructPtrAccess) => {
+                    let operator = Token::Operator(Operator::StructAccess);
+                    self.consume();
+                    let deref = Token::Operator(Operator::Deref,);
+                    let identifier_token = self.consume();
+                    let unary = Self::create_unary_ast_node(deref, expr);
+                    if let Token::Identifier(identifier) = identifier_token {
+                        expr = StructAccess(Box::from(unary), identifier.clone());
+                    } else {
+                        return Err(format!("Expected identifier after '->', found {:?}", identifier_token));
+                    }
+                }
                 _ => break,
             }
         }

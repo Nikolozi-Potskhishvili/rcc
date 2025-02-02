@@ -197,13 +197,20 @@ fn parse_type_def(
         expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
     }
     let total_size = calculate_struct_total_size(&fields, type_map, symbol_table)?;
+    cur_offset = total_size;
+    for mut field in fields.iter_mut() {
+        let cur_field_type = &field.field_type;
+        let size = get_size(cur_field_type, type_map, symbol_table)?;
+        field.offset = cur_offset - size;
+        cur_offset -= size;
+    }
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightCurlyBracket))?;
     expect_token(token_iter, Token::Identifier(name.clone()))?;
     expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
     let def = StructDef {
         name: name.clone(),
         fields,
-        size: total_size + 1,
+        size: total_size ,
     };
     symbol_table.insert(name, SymbolTableEntry::StructDef(def));
     Ok(())
