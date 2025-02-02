@@ -10,6 +10,6 @@ int main() {
     y.num = 10;
 
     x.self = &y;
-    x.num = 11;
+    x.num = 13;
     return x.self->num;
 }

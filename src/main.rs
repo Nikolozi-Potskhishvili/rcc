@@ -230,12 +230,6 @@ mod tests {
         ];
         let expected_values = vec![5, 22, 10];
         for (index, file) in files.iter().enumerate() {
-            // if index != 1 {
-            //     continue;
-            // }
-            // // if index > 0 {
-            // //     break
-            // // }
             let result = test_helper(file, *expected_values.get(index).unwrap());
             clean_up_tests_files();
             result.expect("failed");

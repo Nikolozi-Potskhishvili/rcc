@@ -527,6 +527,15 @@ fn handle_identifier_usage(
 
 }
 
+fn parse_fn_pointer(
+    token_iter: &mut Peekable<IntoIter<Token>>,
+    type_name: &String,
+    type_map: &mut HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>
+) -> Result<Rc<RefCell<Stmt>>, Type> {
+    todo!()
+}
+
 fn parse_struct_identifier(
     token_iter: &mut Peekable<IntoIter<Token>>,
     type_name: &String,
