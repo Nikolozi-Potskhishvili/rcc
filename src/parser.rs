@@ -6,7 +6,7 @@ use std::process::id;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
-use crate::ast_types::Stmt::{Block, For, VarAssignment};
+use crate::ast_types::Stmt::{Block, FnPtrDecl, For, VarAssignment};
 use crate::codegen::get_size;
 use crate::expression_parser::ExpressionParser;
 use crate::lexer::{Operator, SpecialCharacter, Keyword, Token, Constant, Type, SymbolTableEntry, StructDef, StructField};
@@ -252,11 +252,21 @@ fn parse_scope_tokens(
                     cur_type = pointer_type;
                     token_iter.next();
                 }
-                let name_string = match token_iter.peek() {
-                    Some(Token::Identifier(name)) => name.clone(),
-                    _ => return Err(format!("Illegal token after integer keyword: {:?}", token_iter.peek()))
-                };
-                parse_variable_declaration(token_iter, &name_string, type_map, symbol_table, &mut cur_type)?
+                //function pointer
+                if let Some(Token::SpecialCharacter(SpecialCharacter::RightParenthesis)) = token_iter.peek().cloned() {
+                    parse_fn_pointer(token_iter, cur_type,type_map, symbol_table)?
+                } else {
+                    let name_string = match token_iter.peek() {
+                        Some(Token::Identifier(name)) => name.clone(),
+                        // parse fn pointer
+                        Some(Token::SpecialCharacter(SpecialCharacter::LeftParenthesis)) => {
+                            scope_statements.push(parse_fn_pointer(token_iter, cur_type, type_map, symbol_table)?);
+                            continue
+                        }
+                        _ => return Err(format!("Illegal token after integer keyword: {:?}", token_iter.peek()))
+                    };
+                    parse_variable_declaration(token_iter, &name_string, type_map, symbol_table, &mut cur_type)?
+                }
             },
             Token::Keyword(Keyword::If) => {
                 token_iter.next();
@@ -529,11 +539,62 @@ fn handle_identifier_usage(
 
 fn parse_fn_pointer(
     token_iter: &mut Peekable<IntoIter<Token>>,
-    type_name: &String,
+    fn_type: Type,
     type_map: &mut HashMap<String, Type>,
     symbol_table: &mut HashMap<String, SymbolTableEntry>
-) -> Result<Rc<RefCell<Stmt>>, Type> {
-    todo!()
+) -> Result<Rc<RefCell<Stmt>>, String> {
+    //consume (
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+    expect_token(token_iter, Token::Operator(Operator::Multiplication))?;
+    let name = match token_iter.next().unwrap() {
+        Token::Identifier(name) => name,
+        _ => return Err("Invalid token where identifier expected".parse().unwrap())
+    };
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::RightParenthesis))?;
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::LeftParenthesis))?;
+    let mut args = Vec::new();
+    while !matches!(token_iter.peek().cloned(),
+        Some(Token::SpecialCharacter(SpecialCharacter::RightParenthesis)) | None) {
+        if let Some(Token::Keyword(Keyword::Void)) = token_iter.peek().cloned() {
+            if args.len() > 0 {
+                return Err("You cannot have both void and other args in fn ptr".to_string())
+            } else {
+                break
+            }
+        } else if let Some(Token::Keyword(Keyword::Type(cur_type))) = token_iter.peek().cloned() {
+            args.push(cur_type);
+            token_iter.next();
+        } else if let Some(Token::Identifier(ident)) = token_iter.peek().cloned() {
+            if type_map.contains_key(&ident) {
+                args.push(type_map.get(&ident).unwrap().clone())
+            } else {
+                return Err(format!("Unknown type: {ident}"))
+            }
+        }
+        if let Some(Token::SpecialCharacter(SpecialCharacter::Comma)) = token_iter.peek().cloned() {
+            token_iter.next();
+            continue;
+        } else if let Some(Token::SpecialCharacter(SpecialCharacter::RightParenthesis)) = token_iter.peek().cloned() {
+            token_iter.next();
+            break;
+        }
+        return Err(format!("Unexpected token druring fn ptr decl"))
+    }
+    expect_token(token_iter, Token::Operator(Operator::Assign))?;
+    let function = token_iter.next();
+    let mut assigned_name;
+    if let Some(Token::Identifier(ident)) = function {
+        assigned_name = ident;
+    } else {
+        return Err("No function after assignment to fn ptr".to_string())
+    }
+    expect_token(token_iter, Token::SpecialCharacter(SpecialCharacter::SemiColon))?;
+    Ok(Rc::new(RefCell::new(FnPtrDecl {
+        ptr_name: name,
+        return_type: fn_type,
+        arg_types: args,
+        assigned_val: assigned_name.to_string(),
+    })))
 }
 
 fn parse_struct_identifier(
@@ -618,7 +679,7 @@ fn parse_type_declaration(
                 SpecialCharacter::SemiColon => {
                     parse_variable_declaration(token_iter, &name, type_map, symbol_table, cur_type)
                 },
-                _ => Err(format!("Unexpected special character after {:?}, integer declaration", character))
+                _ => Err(format!("Unexpected special character after {:?}, type declaration", character))
             }
         } else if let Some(Token::Operator(Operator::Assign)) = after_identifier {
             return parse_variable_declaration(
@@ -630,7 +691,7 @@ fn parse_type_declaration(
             )
         }
     }
-    Err(format!("Unexpected token while parsing integer declaration: {:?}", token_iter.peek()))
+    Err(format!("Unexpected token while parsing type declaration: {:?}", token_iter.peek()))
 }
 
 fn parse_function_declaration(

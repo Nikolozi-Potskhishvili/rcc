@@ -22,12 +22,19 @@ pub enum Stmt {
         param_name: String,
         param_size: i64,
     },
+    FnPtrDecl {
+        ptr_name: String,
+        return_type: Type,
+        arg_types: Vec<Type>,
+        assigned_val: String,
+    },
     If {
         condition: Expr,
         then_branch: Rc<RefCell<Stmt>>,
         else_branch: Option<Rc<RefCell<Stmt>>>
     },
     While { condition: Expr, body: Rc<RefCell<Stmt>>},
+    DoWhile {condition: Expr, body: Option<Rc<RefCell<Stmt>>>},
     For {
         initialization: Option<Rc<RefCell<Stmt>>>,
         condition: Option<Expr>,

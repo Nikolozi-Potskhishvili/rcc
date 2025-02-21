@@ -38,6 +38,14 @@ pub enum SymbolTableEntry {
     StructDef(StructDef),
     FunDef(FunDef),
     TypeDef,
+    FunPtr(FunPtr),
+}
+
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunPtr {
+    pub nameOfVal: Option<String>,
+    pub defOfVal: Option<FunDef>,
 }
 
 /// Primitive types. Currently, Are supported: Integer, Flout, Double, Char, Short, Long
@@ -47,6 +55,7 @@ pub enum Type {
     Pointer(Box<Type>),
     Array(Box<Type>, i64),
     Struct(String),
+    FnPtr,
     Function,
     Void,
 }
@@ -90,6 +99,7 @@ impl StructDef {
 }
 
 
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct  FunDef {
     pub funType: Type,
@@ -111,6 +121,7 @@ pub enum Keyword {
     SizeOf,
     TypeDef,
     Struct,
+    Do,
 }
 
 ///
@@ -366,6 +377,7 @@ fn get_keyword(token: &str) -> Result<Keyword, String> {
          "typedef" => Ok(Keyword::TypeDef),
          "struct" => Ok(Keyword::Struct),
          "void" => Ok(Keyword::Void),
+         "do" => Ok(Keyword::Do),
         _ => Err("unexpected error during parsing keyword".to_string()),
     }
 }

@@ -182,30 +182,30 @@ fn handle_fn_call(
     // Retrieve the function definition from the symbol table.
     let entry = symbol_table.get(name)
         .ok_or_else(|| format!("Function {} not found", name))?;
-    let (fun_args, fun_type) = if let SymbolTableEntry::FunDef(def) = entry {
-        // We assume def.args is an Option<Vec<Stmt>> where each statement is a FnParam.
-        (def.args.clone().unwrap_or_else(|| vec![]), def.funType.clone())
-    } else {
-        return Err(format!("{} is not a function", name));
+    let mut label = name.clone();
+    let (fun_args, fun_type) = match entry {
+        SymbolTableEntry::FunDef(def) => {
+            // Extract function arguments and type
+            (def.args.clone().unwrap_or_else(|| vec![]), def.funType.clone())
+        }
+        SymbolTableEntry::FunPtr(ptr_def) => {
+            // A function pointer has no arguments, only a function type
+            let inner_name_op = ptr_def.nameOfVal.clone();
+            let def_op = ptr_def.defOfVal.clone();
+            if inner_name_op.is_none() {
+                return Err(format!("No value assigned to fn ptr: {}", name))
+            }
+            let inner_name = inner_name_op.unwrap();
+            let inner_def = def_op.unwrap().clone();
+            label = inner_name;
+            (inner_def.args.clone().unwrap_or_else(|| vec![]), inner_def.funType.clone())
+        }
+        _ => return Err(format!("{} is not a function", name)),
     };
 
     // For simplicity, assume every argument is passed on the stack as 8 bytes.
     let num_args = fun_args.len() as i64;
     let total_args_size = num_args * 8; // each push uses 8 bytes
-
-    // Compute padding needed so that BEFORE the call, rsp is 16-byte aligned.
-    // When call _fun is executed, the call instruction will push an 8-byte return address.
-    // We want: (cur_stack + total_args_size + 8) % 16 == 0.
-    // let mut padding = 0;
-    // if (*cur_stack + total_args_size + 8) % 16 != 0 {
-    //     padding = 16 - ((*cur_stack + total_args_size + 8) % 16);
-    // }
-    //
-    // // Reserve space for the padding.
-    // if padding > 0 {
-    //     result_vec.push(format!("    sub rsp, {}", padding));
-    //     *cur_stack += padding;
-    // }
 
     // Evaluate and push the arguments in reverse order.
     // This way, after pushing, the first argument is closest to the return address.
@@ -225,7 +225,7 @@ fn handle_fn_call(
     }
 
     // Call the function. The call will push the return address (8 bytes).
-    result_vec.push(format!("    call _{}", name));
+    result_vec.push(format!("    call _{}", label));
 
     // After the call, the pushed arguments (and any padding) remain on the stack.
     // Remove them by adding the total size back to rsp.

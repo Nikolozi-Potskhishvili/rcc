@@ -250,4 +250,16 @@ mod tests {
             result.expect("failed");
         }
     }
+
+    #[test]
+    fn test_function_ptr() {
+        let files = vec!["./test_files/fn_ptr/fn_ptr.c"];
+        let values = vec![4];
+        for (index, file) in files.iter().enumerate() {
+            let result = test_helper(file, *values.get(index).unwrap());
+            clean_up_tests_files();
+            result.expect("failed");
+        }
+    }
+
 }

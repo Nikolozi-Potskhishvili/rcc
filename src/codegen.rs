@@ -1,11 +1,11 @@
 use std::cell::{RefCell};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::ops::{Deref};
+use std::ops::{Add, Deref};
 use std::rc::Rc;
 use crate::ast_types::{BinaryExpression, Expr, Stmt, UnaryExpr};
 use crate::expression_codgen::generate_expression_instructions;
-use crate::lexer::{Constant, Operator, StructDef, SymbolTableEntry, Type};
+use crate::lexer::{Constant, FunDef, FunPtr, Operator, StructDef, SymbolTableEntry, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Variable {
@@ -62,6 +62,7 @@ pub fn generate_assembly(
                 }
             },
             Stmt::VarDecl { name, var_type, expr } => {},
+
             _ => return Err("Unsupported root token".to_string())
         }
     }
@@ -152,6 +153,10 @@ fn gen_block_rec(
                     result += "\n";
                 }
             },
+            Stmt::FnPtrDecl {return_type, assigned_val, arg_types, ptr_name} => {
+                let instructions = generate_fn_ptr_assignment(ptr_name,return_type,  arg_types, assigned_val, stack_ptr, type_map, symbol_table, upper_scope_vars)?;
+                result += &instructions;
+            }
             Stmt::VarAssignment { name, expr } => {
                 if expr.is_none() {
                     return Err(format!("No expression is assigned to var: {}", name))
@@ -163,7 +168,7 @@ fn gen_block_rec(
                 let mut vec = Vec::new();
                 generate_expression_instructions(expr, upper_scope_vars, &mut vec, type_map, symbol_table, stack_ptr)?;
                 result += &*(vec.join("\n") + "\n");
-            }
+            },
             Stmt::Return(expr_option) => {
                 if expr_option.is_none() {
                     return Err("No expression after return".to_string())
@@ -173,7 +178,7 @@ fn gen_block_rec(
                 result += &format!("    add rsp, {}\n", *stack_ptr);
                 result+= "    mov rsp, rbp\n    pop rbp\n";
                 result += "    ret\n";
-            }
+            },
             _ => {}
         }
     }
@@ -185,6 +190,77 @@ fn gen_block_rec(
         upper_scope_vars.remove(&var);
     }
     Ok(result)
+}
+
+fn generate_fn_ptr_assignment(
+    ptr_name: &String,
+    ptr_type: &Type,
+    ptr_args: &Vec<Type>,
+    ptr_val : &String,
+    stack_ptr: &mut i64,
+    type_map: &HashMap<String, Type>,
+    symbol_table: &mut HashMap<String, SymbolTableEntry>,
+    scope_vars: &mut HashMap<String, Variable>
+) -> Result<String, String> {
+     if !symbol_table.contains_key(ptr_val) {
+         return Err(format!("No such function as: {ptr_val},declared."))
+     }
+    let funDef = symbol_table.get(ptr_val).unwrap();
+    if let (SymbolTableEntry::FunDef(def)) = funDef {
+        let mut result = String::from("    sub rsp, 8\n");
+        *stack_ptr += 8;
+        if ptr_type != &def.funType {
+            return Err("Incorrect return vals".to_string())
+        }
+        if !check_types(&def.args, ptr_args) {
+            return Err("Incorrect types".to_string())
+        }
+        let entry = SymbolTableEntry::FunPtr(FunPtr{
+            nameOfVal: Some(ptr_val.clone()),
+            defOfVal: Some(def.clone()),
+        });
+        let var = Variable {
+            var_type: Type::FnPtr,
+            memory_offset: *stack_ptr + 8,
+            register: None,
+            defined: false,
+            pointer: false,
+        };
+        scope_vars.insert(ptr_name.clone(), var);
+        symbol_table.insert(ptr_name.clone(), entry);
+        return Ok(result)
+    }
+    Err("".to_string())
+}
+
+fn check_types(
+    def_args: &Option<Vec<Stmt>>,
+    to_check: &Vec<Type>,
+) -> bool {
+    if def_args.is_none() && to_check.len() == 0 {
+        return true
+    } else if def_args.is_none() {
+        return false
+    }
+    let def_unwrap = def_args.clone().unwrap();
+    if def_unwrap.len() != to_check.len() {
+        return false
+    }
+
+    for (index, val) in def_unwrap.iter().enumerate() {
+        let cur_type = match val {
+            Stmt::FnParam { param_type, param_name, param_size } => param_type,
+            _ => return false
+        };
+
+        let type_check = to_check.get(index).unwrap();
+        if cur_type != type_check {
+            return false
+        }
+
+    }
+
+    return true
 }
 
 fn generate_for_loop_instructions(
