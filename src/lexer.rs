@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use crate::ast_types::Stmt;
 use crate::codegen::get_size;
 use crate::lexer::FoundLongToken::{Found, NotFound};
+use std::collections::HashMap;
 
 ///
 /// The most upper-level representation of token
@@ -18,18 +18,13 @@ pub enum Token {
     EndOFFile,
 }
 
-
 impl Token {
     pub fn get_operator(&self) -> Option<Operator> {
         match self {
-            Token::Operator(operator) => {
-                Some(operator.clone())
-            }
+            Token::Operator(operator) => Some(operator.clone()),
             _ => None,
         }
     }
-
-
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,7 +35,6 @@ pub enum SymbolTableEntry {
     TypeDef,
     FunPtr(FunPtr),
 }
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunPtr {
@@ -91,19 +85,17 @@ impl StructDef {
     pub fn get_field_type(&mut self, field_name: &String) -> Option<Type> {
         for field in &self.fields {
             if field.name == *field_name {
-                return Some(field.field_type.clone())
+                return Some(field.field_type.clone());
             }
         }
         None
     }
 }
 
-
-
 #[derive(Clone, Debug, PartialEq)]
-pub struct  FunDef {
+pub struct FunDef {
     pub funType: Type,
-    pub args: Option<Vec<Stmt>>
+    pub args: Option<Vec<Stmt>>,
 }
 
 ///
@@ -173,8 +165,9 @@ impl Operator {
     ///
     pub fn is_left_associative(&self) -> bool {
         match self {
-            Operator::Minus | Operator::Tilde | Operator::And
-            | Operator::Or | Operator::Plus => true,
+            Operator::Minus | Operator::Tilde | Operator::And | Operator::Or | Operator::Plus => {
+                true
+            }
             _ => false,
         }
     }
@@ -193,15 +186,15 @@ pub enum Constant {
 
 impl Constant {
     pub fn get_type(&self) -> Type {
-       match self {
-           Constant::Integer(_) => Type::Primitive("int".to_string()),
-           Constant::Short(_) => Type::Primitive("short".to_string()),
-           Constant::Long(_) => Type::Primitive("long".to_string()),
-           Constant::Double(_) => Type::Primitive("double".to_string()),
-           Constant::Float(_) => Type::Primitive("float".to_string()),
-           Constant::Char(_) => Type::Primitive("char".to_string()),
-           Constant::Undefined => Type::Function,
-       }
+        match self {
+            Constant::Integer(_) => Type::Primitive("int".to_string()),
+            Constant::Short(_) => Type::Primitive("short".to_string()),
+            Constant::Long(_) => Type::Primitive("long".to_string()),
+            Constant::Double(_) => Type::Primitive("double".to_string()),
+            Constant::Float(_) => Type::Primitive("float".to_string()),
+            Constant::Char(_) => Type::Primitive("char".to_string()),
+            Constant::Undefined => Type::Function,
+        }
     }
 
     pub fn get_val(&self) -> String {
@@ -212,7 +205,7 @@ impl Constant {
             Constant::Double(val) => val.to_string(),
             Constant::Float(val) => val.to_string(),
             Constant::Char(val) => val.to_string(),
-            Constant::Undefined => "".to_string()
+            Constant::Undefined => "".to_string(),
         }
     }
 }
@@ -231,20 +224,17 @@ pub enum SpecialCharacter {
 
 pub struct Lexer;
 
-
 impl Lexer {
     ///
     /// Takes source code as input and returns string of supported C tokens
     ///
     pub fn tokenize(source_code: &str) -> Vec<Token> {
         let mut result = Vec::new();
-        source_code.lines()
-            .for_each(|line| {
-                line.split_whitespace()
-                    .for_each(|word|  {
-                        result.extend(parse_token_helper(word));
-                    });
+        source_code.lines().for_each(|line| {
+            line.split_whitespace().for_each(|word| {
+                result.extend(parse_token_helper(word));
             });
+        });
         result
     }
 }
@@ -286,16 +276,14 @@ fn parse_token_helper(s: &str) -> Vec<Token> {
     tokens
 }
 
-
-
 /// parses long tokens such as keywords, constants and identifiers
 fn parse_long_token(s: &str) -> Option<Token> {
     if s.is_empty() {
         None
     } else if let Ok(keyword) = get_keyword(s) {
-         Some(Token::Keyword(keyword))
+        Some(Token::Keyword(keyword))
     } else if is_const_integer(s) {
-         Some(Token::Constant(s.parse::<i64>().unwrap()))
+        Some(Token::Constant(s.parse::<i64>().unwrap()))
     } else {
         Some(Token::Identifier(s.to_string()))
     }
@@ -340,7 +328,7 @@ fn process_long_token(
             }
         }
         Found(tokens)
-    } else{
+    } else {
         NotFound(tokens)
     }
 }
@@ -351,7 +339,7 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
     }
     let _allowed_chars = "[]{}(),.:;*=#~";
     let ch = token.chars().next().unwrap();
-    match  ch {
+    match ch {
         '[' => Ok(SpecialCharacter::LeftSquareBracket),
         ']' => Ok(SpecialCharacter::RightSquareBracket),
         '{' => Ok(SpecialCharacter::LeftCurlyBracket),
@@ -364,20 +352,18 @@ fn get_special_symbol(token: &str) -> Result<SpecialCharacter, &'static str> {
     }
 }
 
-
 fn get_keyword(token: &str) -> Result<Keyword, String> {
-     match token {
-         "int" | "short" | "long" | "char" | "bool" =>
-             Ok(Keyword::Type(get_type(token.clone())?)),
-         "for" => Ok(Keyword::For),
-         "while" => Ok(Keyword::While),
-         "if" => Ok(Keyword::If),
-         "else" => Ok(Keyword::Else),
-         "return" => Ok(Keyword::Return),
-         "typedef" => Ok(Keyword::TypeDef),
-         "struct" => Ok(Keyword::Struct),
-         "void" => Ok(Keyword::Void),
-         "do" => Ok(Keyword::Do),
+    match token {
+        "int" | "short" | "long" | "char" | "bool" => Ok(Keyword::Type(get_type(token.clone())?)),
+        "for" => Ok(Keyword::For),
+        "while" => Ok(Keyword::While),
+        "if" => Ok(Keyword::If),
+        "else" => Ok(Keyword::Else),
+        "return" => Ok(Keyword::Return),
+        "typedef" => Ok(Keyword::TypeDef),
+        "struct" => Ok(Keyword::Struct),
+        "void" => Ok(Keyword::Void),
+        "do" => Ok(Keyword::Do),
         _ => Err("unexpected error during parsing keyword".to_string()),
     }
 }
@@ -408,10 +394,9 @@ fn get_operator(token: &str) -> Result<Operator, String> {
     }
 }
 
-
 fn is_const_integer(token: &str) -> bool {
     if let Ok(_) = token.to_string().parse::<i32>() {
-        return true
+        return true;
     }
     false
 }
@@ -426,29 +411,30 @@ fn is_identifier(token: &str) -> bool {
     let valid_numbers_range = '0'..='9';
     let mut iterator = token.chars();
     if let Some(first_letter) = iterator.next() {
-        if !(valid_lowercase_range.contains(&first_letter) ||
-            valid_uppercase_range.contains(&first_letter) ||
-            first_letter == '_') {
+        if !(valid_lowercase_range.contains(&first_letter)
+            || valid_uppercase_range.contains(&first_letter)
+            || first_letter == '_')
+        {
             return false;
         }
     } else {
         return false;
     }
     for ch in token.chars() {
-        if !(valid_uppercase_range.contains(&ch) ||
-            valid_lowercase_range.contains(&ch) ||
-            valid_numbers_range.contains(&ch) ||
-            ch == '_') {
-            return false
+        if !(valid_uppercase_range.contains(&ch)
+            || valid_lowercase_range.contains(&ch)
+            || valid_numbers_range.contains(&ch)
+            || ch == '_')
+        {
+            return false;
         }
     }
     true
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::lexer::{is_identifier, get_keyword, Lexer, Keyword};
+    use crate::lexer::{get_keyword, is_identifier, Keyword, Lexer};
 
     #[test]
     fn keywords() {
@@ -469,9 +455,7 @@ mod tests {
     fn only_keywords() {
         let input = "for while if else";
         let output = Lexer::tokenize(&input);
-        output.iter().for_each(|token| {
-            println!("{token:?}")
-        });
+        output.iter().for_each(|token| println!("{token:?}"));
         assert_eq!(output.len(), 4);
     }
 
@@ -482,20 +466,22 @@ mod tests {
             return 2;\
         }";
         let output = Lexer::tokenize(&input);
-        output.iter().for_each(|token| {
-            println!("{token:?}")
-        });
+        output.iter().for_each(|token| println!("{token:?}"));
         assert_eq!(output.len(), 9);
     }
 
     #[test]
     fn for_loop() {
         let input_regular = "for(int i = 0; i < 1; i++) {";
-        let input_minimal_spaces= "for(int i=0; i<1;i++){";
+        let input_minimal_spaces = "for(int i=0; i<1;i++){";
         let first_output = Lexer::tokenize(&input_regular);
         let second_output = Lexer::tokenize(&input_minimal_spaces);
-        first_output.iter().for_each(|cur| println!("{:?} cur token", cur));
-        second_output.iter().for_each(|cur| println!("{:?} cur token", cur));
+        first_output
+            .iter()
+            .for_each(|cur| println!("{:?} cur token", cur));
+        second_output
+            .iter()
+            .for_each(|cur| println!("{:?} cur token", cur));
         assert_eq!(first_output.len(), second_output.len());
     }
 
@@ -518,5 +504,4 @@ mod tests {
         assert!(is_identifier(input2));
         assert!(!is_identifier(invalid_input2));
     }
-
 }

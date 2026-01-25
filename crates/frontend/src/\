@@ -1,0 +1,304 @@
+#[derive(Debug, PartialEq, Clone)]
+pub enum Token {
+    Identifier(String),
+    Keyword(Keyword),
+    IntLiteral(String), // only ints for now
+    FloatLiteral(String),
+    StringLiteral(String),
+    CahrLiteral(char),
+    Operator(Operator),
+    Punctuator(Punctuator),
+    Comments(String),
+    EOF,
+}
+
+impl Token {
+    pub fn get_operator(&self) -> Option<Operator> {
+        match self {
+            Token::Operator(operator) => Some(operator.clone()),
+            _ => None,
+        }
+    }
+}
+
+///
+/// Keywords, currently supported: Type(Type), Return, Void, For, While, If, Else And SizeOf
+///
+#[derive(Debug, PartialEq, Clone)]
+pub enum Keyword {
+    Return,
+    Void,
+    For,
+    While,
+    If,
+    Else,
+    SizeOf,
+    TypeDef,
+    Struct,
+    Do,
+    Int,
+    Short,
+    Long,
+    Char,
+    Bool,
+}
+
+///
+/// Operators, Currently supported: +, -, /, *(Mult), =, |, &, ~, !, <, > and ^
+///
+#[derive(Debug, PartialEq, Clone)]
+pub enum Operator {
+    Plus,
+    Minus,
+    Division,
+    Asterisk,
+    Assign,
+    IncrementAssign,
+    DecrementAssign,
+    And,
+    Or,
+    Not,
+    Xor,
+    Modulo,
+    Tilde,
+    Less,
+    More,
+    Deref,
+    Ref,
+    PlusPlus,
+    MinusMinus,
+    ArrayAccess,
+    StructAccess,
+    StructPtrAccess,
+    LessEqual,
+    MoreEqual,
+    Equal,
+    NotEqual,
+}
+
+impl Operator {
+    ///
+    /// Returns true if operator is unary operator
+    ///
+    pub fn is_unary(&self) -> bool {
+        match self {
+            Operator::Not | Operator::Tilde => true,
+            _ => false,
+        }
+    }
+
+    ///
+    /// Returns true if operator is left associative
+    ///
+    pub fn is_left_associative(&self) -> bool {
+        match self {
+            Operator::Minus | Operator::Tilde | Operator::And | Operator::Or | Operator::Plus => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Punctuator {
+    LeftParenthesis,
+    RightParenthesis,
+    LeftCurlyBracket,
+    RightCurlyBracket,
+    LeftSquareBracket,
+    RightSquareBracket,
+    SemiColon,
+    Comma,
+}
+pub struct Lexer;
+
+impl Lexer {
+    ///
+    /// Takes source code as input and returns Vector of supported C tokens
+    ///
+    pub fn tokenize(source_code: &str) -> Result<Vec<Token>, String> {
+        let mut result = Vec::new();
+        let mut chars = source_code.chars().peekable();
+
+        let whitespaces = " \t\x0B\x0C\n";
+        let mut cur_token = String::new();
+
+        while let Some(&ch) = chars.peek() {
+            // if ch is whitespace current token ends
+            if whitespaces.contains(ch) {
+                match process_long_token(&cur_token) {
+                    Some(token) => result.push(token),
+                    None => {
+                        return Err(String::from("Expected long token found"));
+                    }
+                };
+                cur_token.clear();
+            } else if ch as u32 == 0x22 {
+                // check "
+                result = process_string_literal(cur_token)
+            } else if ch as u32 == 0x27 { // check '
+            }
+            if let Ok(_) = get_operator(&ch.to_string()) {
+                // Check for two-character operators
+                let mut op = ch.to_string();
+                chars.next(); // Consume first character
+
+                if let Some(&next_ch) = chars.peek() {
+                    let possible_op = format!("{op}{next_ch}");
+                    if get_operator(&possible_op).is_ok() {
+                        op = possible_op;
+                        chars.next(); // Consume second character
+                    }
+                }
+                result = process_long_token(&cur_token);
+                cur_token.clear();
+                result.push(Token::Operator(get_operator(&op).unwrap()));
+            } else if let Ok(punctuator) = get_punctuator(&ch.to_string()) {
+                result = process_long_token(&cur_token);
+                cur_token.clear();
+                result.push(Token::Punctuator(punctuator));
+                chars.next(); // Consume special symbol
+            } else {
+                cur_token.push(ch);
+                chars.next(); // Consume character
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// parses long tokens such as keywords, constants and identifiers
+fn parse_long_token(s: &str) -> Option<Token> {
+    if s.is_empty() {
+        None
+    } else if let Ok(keyword) = get_keyword(s) {
+        Some(Token::Keyword(keyword))
+    } else if is_const_integer(s) {
+        // Some(Token::Constant(s.parse::<i64>().unwrap()))
+        None
+    } else {
+        Some(Token::Identifier(s.to_string()))
+    }
+}
+
+fn process_long_token(cur_token: &str) -> Option<Token> {
+    if let Some(token) = parse_long_token(&cur_token) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+fn process_string_literal(cur_token: &str) -> Option<Token> {
+    None
+}
+
+fn process_char_literal(cur_token: &str, tokens: Vec<Token>) -> Option<Token> {
+    None
+}
+
+fn get_punctuator(token: &str) -> Result<Punctuator, &'static str> {
+    if token.len() != 1 {
+        return Err("Special character length must be 1");
+    }
+    let _allowed_chars = "[]{}(),.:;*=#~";
+    let ch = token.chars().next().unwrap();
+    match ch {
+        '[' => Ok(Punctuator::LeftSquareBracket),
+        ']' => Ok(Punctuator::RightSquareBracket),
+        '{' => Ok(Punctuator::LeftCurlyBracket),
+        '}' => Ok(Punctuator::RightCurlyBracket),
+        '(' => Ok(Punctuator::LeftParenthesis),
+        ')' => Ok(Punctuator::RightParenthesis),
+        ';' => Ok(Punctuator::SemiColon),
+        ',' => Ok(Punctuator::Comma),
+        _ => Err("Illegal special character"),
+    }
+}
+
+fn get_keyword(token: &str) -> Result<Keyword, String> {
+    match token {
+        "int" => Ok(Keyword::Int),
+        "short" => Ok(Keyword::Short),
+        "long" => Ok(Keyword::Long),
+        "char" => Ok(Keyword::Char),
+        "bool" => Ok(Keyword::Bool),
+        "for" => Ok(Keyword::For),
+        "while" => Ok(Keyword::While),
+        "if" => Ok(Keyword::If),
+        "else" => Ok(Keyword::Else),
+        "return" => Ok(Keyword::Return),
+        "typedef" => Ok(Keyword::TypeDef),
+        "struct" => Ok(Keyword::Struct),
+        "void" => Ok(Keyword::Void),
+        "do" => Ok(Keyword::Do),
+        _ => Err("unexpected error during parsing keyword".to_string()),
+    }
+}
+
+fn get_operator(token: &str) -> Result<Operator, String> {
+    match token {
+        "+" => Ok(Operator::Plus),
+        "*" => Ok(Operator::Asterisk),
+        "/" => Ok(Operator::Division),
+        "!" => Ok(Operator::Not),
+        "-" => Ok(Operator::Minus),
+        "~" => Ok(Operator::Tilde),
+        "=" => Ok(Operator::Assign),
+        "<" => Ok(Operator::Less),
+        ">" => Ok(Operator::More),
+        "&" => Ok(Operator::Ref),
+        "." => Ok(Operator::StructAccess),
+        "->" => Ok(Operator::StructPtrAccess),
+        "==" => Ok(Operator::Equal),
+        "!=" => Ok(Operator::NotEqual),
+        ">=" => Ok(Operator::MoreEqual),
+        "<=" => Ok(Operator::LessEqual),
+        "||" => Ok(Operator::Or),
+        "&&" => Ok(Operator::And),
+        "+=" => Ok(Operator::IncrementAssign),
+        "-=" => Ok(Operator::DecrementAssign),
+        "++" => Ok(Operator::PlusPlus),
+        "--" => Ok(Operator::MinusMinus),
+        _ => Err(String::from("unexpected error during parsing operator")),
+    }
+}
+
+fn is_const_integer(token: &str) -> bool {
+    if let Ok(_) = token.to_string().parse::<i64>() {
+        return true;
+    }
+    false
+}
+
+fn is_const(token: &str) -> bool {
+    is_const_integer(token)
+}
+
+fn is_identifier(token: &str) -> bool {
+    let valid_lowercase_range = 'a'..='z';
+    let valid_uppercase_range = 'A'..='Z';
+    let valid_numbers_range = '0'..='9';
+    let mut iterator = token.chars();
+    if let Some(first_letter) = iterator.next() {
+        if !(valid_lowercase_range.contains(&first_letter)
+            || valid_uppercase_range.contains(&first_letter)
+            || first_letter == '_')
+        {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    for ch in token.chars() {
+        if !(valid_uppercase_range.contains(&ch)
+            || valid_lowercase_range.contains(&ch)
+            || valid_numbers_range.contains(&ch)
+            || ch == '_')
+        {
+            return false;
+        }
+    }
+    true
+}

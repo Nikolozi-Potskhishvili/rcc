@@ -1,0 +1,11 @@
+[package]
+name = "rcc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+frontend = { path = "../frontend" }
+ir = { path = "../ir" }
+x86_64_backend = { path = "../backends/x86_64" }
+runtime = { path = "../runtime" }
+clap = { version = "4", features = ["derive"] }

@@ -1,7 +1,9 @@
-[package]
-name = "rcc"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-log = "0.4.22"
-lazy_static = "1.5.0"
+[workspace]
+resolver = "3"
+members = [
+    "crates/frontend",
+    "crates/ir",
+    "crates/backends/x86_64",
+    "crates/runtime",
+    "crates/driver",
+]
