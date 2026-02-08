@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub struct AST {
-    root: Program,
+    pub root: Program,
 }
 
 impl AST {
@@ -158,6 +158,7 @@ pub enum Decl {
         name: String,
         return_type: TypeSyntax,
         args: Vec<(String, Box<TypeSyntax>)>,
+        body: Option<Box<Stmt>>, // None if prototype
     },
 }
 
@@ -180,11 +181,15 @@ impl Decl {
                 name,
                 return_type,
                 args,
+                body,
             } => {
                 println!("{}Function {} -> {:?}", prefix, name, return_type);
                 println!("{}Args: ", prefix);
                 for (arg_name, arg_type) in args {
                     println!("{} {} {:?}", prefix, arg_name, arg_type);
+                }
+                if let Some(body) = body {
+                    body.print(ident + 1);
                 }
             }
         }
