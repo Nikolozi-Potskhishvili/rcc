@@ -1,11 +1,16 @@
 use crate::ast::{AST, Decl, Expr, Program, Stmt};
-use crate::lexer::{Keyword, Token, TokenKind};
+use crate::token::{Keyword, Token, TokenKind};
 use std::collections::HashSet;
 
 pub struct Parser {
     tokens: Vec<Token>,
     index: usize,
     typedefs: Vec<HashSet<String>>,
+}
+
+pub struct ParserErr {
+    token: Option<Token>,
+    msg: String,
 }
 
 impl Parser {
@@ -38,7 +43,7 @@ impl Parser {
 
     fn is_type_specifier(&self) -> bool {
         match self.peek() {
-            Some(TokenKind::Keyword(keyword)) => keyword.is_type(),
+            // Some(TokenKind::Keyword(keyword)) => keyword.(),
             Some(TokenKind::Identifier(identifier)) => self
                 .typedefs
                 .last()
@@ -55,34 +60,28 @@ impl Parser {
         false
     }
 
-    pub fn parse(&mut self) -> Result<AST, String> {
-        let global = self
-            .translation_unit()
-            .map_err(|err| format!("Error during parsing: {:?}", err))?;
+    pub fn parse(&mut self) -> Result<AST, ParserErr> {
+        let global = self.translation_unit()?;
         Ok(AST {
             root: Program { decls: global },
         })
     }
 
-    fn translation_unit(&mut self) -> Result<Vec<Decl>, String> {
+    fn translation_unit(&mut self) -> Result<Vec<Decl>, ParserErr> {
         let mut decls = Vec::new();
         while !self.is_eof() {
-            let decl = self
-                .external_decl()
-                .map_err(|err| format!("Error during translation unit: {:?}", err))?;
+            let decl = self.external_decl()?;
             decls.push(decl);
         }
         Ok(Vec::new())
     }
 
-    fn external_decl(&mut self) -> Result<Decl, String> {
-        // } else if  {
-        //
-        // } else {
-        //     Err(format!(
-        //         "Error in parsing external declaration, unexpected token: {:?}",
-        //         self.peek()
-        //     ))
+    fn external_decl(&mut self) -> Result<Decl, ParserErr> {
+        // match self.peek() {
+        //     Some(token) => match token {
+        //         Keyword(Keyword::TypeDef) => return self.obj_decl(),
+        //     },
+        //     None => return Err(self.pars_err(None, "expected Some in external_decl, found None")),
         // }
         todo!()
     }
@@ -91,22 +90,20 @@ impl Parser {
     // Parser treats both function definitions and prototypes as same type: Decl::Func, for
     // prototypes body(Option<Box<Stmt>>) is None.
     //
-    fn func_def(&mut self) -> Result<Vec<Decl>, String> {
+    fn func_def(&mut self) -> Result<Vec<Decl>, ParserErr> {
         todo!()
     }
 
-    fn obj_decl(&mut self) -> Result<Decl, String> {
+    fn obj_decl(&mut self) -> Result<Decl, ParserErr> {
         if self.is_typdef() {
-            let decl = self
-                .typedef_decl()
-                .map_err(|err| format!("Error during parsing external declaration: {:?}", err))?;
+            let decl = self.typedef_decl()?;
 
             return Ok(decl);
         }
-        Err("Hello".to_string())
+        todo!()
     }
 
-    fn typedef_decl(&mut self) -> Result<Decl, String> {
+    fn typedef_decl(&mut self) -> Result<Decl, ParserErr> {
         todo!()
     }
 
@@ -120,5 +117,12 @@ impl Parser {
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
         todo!()
+    }
+
+    fn pars_err(&self, token: Option<Token>, msg: &str) -> ParserErr {
+        ParserErr {
+            token: token,
+            msg: msg.to_string(),
+        }
     }
 }

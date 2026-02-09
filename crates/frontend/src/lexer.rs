@@ -1,147 +1,15 @@
+use crate::token::{Keyword, Operator, Punctuator, Span, Token, TokenKind};
 use std::{iter::Peekable, result, str::Chars};
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Token {
-    pub kind: TokenKind,
-    pub span: Span,
-    // pub lexmi: String,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
+pub struct Lexer {
+    start: usize,
+    index: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct LexerErr {
     pub span: Span,
     pub msg: String,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum TokenKind {
-    Identifier(String),
-    Keyword(Keyword),
-    IntLiteral(String), // only ints for now
-    FloatLiteral(String),
-    StringLiteral(Vec<i32>),
-    CharLiteral(i32),
-    Operator(Operator),
-    Punctuator(Punctuator),
-    Comments(String),
-    EOF,
-}
-
-///
-/// Keywords, currently supported: Type(Type), Return, Void, For, While, If, Else And SizeOf
-///
-#[derive(Debug, PartialEq, Clone)]
-pub enum Keyword {
-    Return,
-    Void,
-    For,
-    While,
-    If,
-    Else,
-    SizeOf,
-    TypeDef,
-    Struct,
-    Do,
-    Int,
-    Short,
-    Long,
-    Char,
-    Bool,
-}
-
-impl Keyword {
-    pub fn is_type(&self) -> bool {
-        match self {
-            Keyword::Void
-            | Keyword::Int
-            | Keyword::Short
-            | Keyword::Long
-            | Keyword::Char
-            | Keyword::Bool => return true,
-            _ => return false,
-        }
-    }
-}
-
-///
-/// Operators, Currently supported: +, -, /, *(Mult), =, |, &, ~, !, <, > and ^
-///
-#[derive(Debug, PartialEq, Clone)]
-enum Operator {
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    Assign,
-    PlusPlus,
-    MinusMinus,
-    PlusEqual,
-    MinusEqual,
-    EqualEqual,
-    NotEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    AndAnd,
-    OrOr,
-    Ampersand,
-    Pipe,
-    Caret,
-    Tilde,
-    Exclamation,
-    Dot,
-    Arrow,
-}
-
-impl Operator {
-    ///
-    /// Returns true if operator is unary operator
-    ///
-    pub fn is_unary(&self) -> bool {
-        match self {
-            Operator::Exclamation | Operator::Tilde => true,
-            _ => false,
-        }
-    }
-
-    ///
-    /// Returns true if operator is left associative
-    ///
-    pub fn is_left_associative(&self) -> bool {
-        match self {
-            Operator::Minus
-            | Operator::Tilde
-            | Operator::Ampersand
-            | Operator::Pipe
-            | Operator::Plus => true,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum Punctuator {
-    LeftParenthesis,
-    RightParenthesis,
-    LeftCurlyBracket,
-    RightCurlyBracket,
-    LeftSquareBracket,
-    RightSquareBracket,
-    SemiColon,
-    Comma,
-}
-
-pub struct Lexer {
-    start: usize,
-    index: usize,
 }
 
 impl Lexer {
@@ -157,6 +25,7 @@ impl Lexer {
         ch
     }
 
+    ///
     /// Takes source code as input and returns Vector of supported C tokens
     ///
     pub fn tokenize(&mut self, source_code: &str) -> Result<Vec<Token>, LexerErr> {
@@ -183,7 +52,7 @@ impl Lexer {
                 let token = self.parse_char_literal(&mut chars)?;
                 result.push(token);
                 self.start = self.index;
-            } else if let Ok(_) = get_operator(&ch.to_string()) {
+            } else if let Ok(_) = Operator::from_str(&ch.to_string()) {
                 if let Some(kind) = parse_long_token(&cur_token) {
                     result.push(self.token(kind));
                     self.start = self.index;
@@ -193,15 +62,15 @@ impl Lexer {
                 self.bump(&mut chars); // Consume first character
                 if let Some(&next_ch) = chars.peek() {
                     let possible_op = format!("{op}{next_ch}");
-                    if get_operator(&possible_op).is_ok() {
+                    if Operator::from_str(&possible_op).is_ok() {
                         op = possible_op;
                         self.bump(&mut chars); // Consume second character
                     }
                 }
-                result.push(self.token(TokenKind::Operator(get_operator(&op).unwrap())));
+                result.push(self.token(TokenKind::Operator(Operator::from_str(&op).unwrap())));
                 self.start = self.index;
                 cur_token.clear();
-            } else if let Ok(punctuator) = get_punctuator(&ch.to_string()) {
+            } else if let Ok(punctuator) = Punctuator::from_str(&ch.to_string()) {
                 if let Some(kind) = parse_long_token(&cur_token) {
                     result.push(self.token(kind));
                     self.start = self.index;
@@ -430,7 +299,7 @@ impl Lexer {
 fn parse_long_token(s: &str) -> Option<TokenKind> {
     if s.is_empty() {
         None
-    } else if let Ok(keyword) = get_keyword(s) {
+    } else if let Ok(keyword) = Keyword::from_str(s) {
         Some(TokenKind::Keyword(keyword))
     } else if is_int_literal(s) {
         Some(TokenKind::IntLiteral(s.to_string()))
@@ -441,85 +310,12 @@ fn parse_long_token(s: &str) -> Option<TokenKind> {
     }
 }
 
-fn get_punctuator(token: &str) -> Result<Punctuator, &'static str> {
-    if token.len() != 1 {
-        return Err("Special character length must be 1");
-    }
-    let _allowed_chars = "[]{}(),.:;*=#~";
-    let ch = token.chars().next().unwrap();
-    match ch {
-        '[' => Ok(Punctuator::LeftSquareBracket),
-        ']' => Ok(Punctuator::RightSquareBracket),
-        '{' => Ok(Punctuator::LeftCurlyBracket),
-        '}' => Ok(Punctuator::RightCurlyBracket),
-        '(' => Ok(Punctuator::LeftParenthesis),
-        ')' => Ok(Punctuator::RightParenthesis),
-        ';' => Ok(Punctuator::SemiColon),
-        ',' => Ok(Punctuator::Comma),
-        _ => Err("Illegal special character"),
-    }
-}
-
-fn get_keyword(token: &str) -> Result<Keyword, String> {
-    match token {
-        "int" => Ok(Keyword::Int),
-        "short" => Ok(Keyword::Short),
-        "long" => Ok(Keyword::Long),
-        "char" => Ok(Keyword::Char),
-        "bool" => Ok(Keyword::Bool),
-        "for" => Ok(Keyword::For),
-        "while" => Ok(Keyword::While),
-        "if" => Ok(Keyword::If),
-        "else" => Ok(Keyword::Else),
-        "return" => Ok(Keyword::Return),
-        "typedef" => Ok(Keyword::TypeDef),
-        "struct" => Ok(Keyword::Struct),
-        "void" => Ok(Keyword::Void),
-        "do" => Ok(Keyword::Do),
-        _ => Err("unexpected error during parsing keyword".to_string()),
-    }
-}
-
-fn get_operator(token: &str) -> Result<Operator, String> {
-    match token {
-        "+" => Ok(Operator::Plus),
-        "*" => Ok(Operator::Star),
-        "/" => Ok(Operator::Slash),
-        "-" => Ok(Operator::Minus),
-        "~" => Ok(Operator::Tilde),
-        "&" => Ok(Operator::Ampersand),
-        "|" => Ok(Operator::Pipe),
-        "=" => Ok(Operator::Assign),
-        "<" => Ok(Operator::Less),
-        ">" => Ok(Operator::Greater),
-        "==" => Ok(Operator::EqualEqual),
-        "!=" => Ok(Operator::NotEqual),
-        ">=" => Ok(Operator::GreaterEqual),
-        "<=" => Ok(Operator::LessEqual),
-        "!" => Ok(Operator::Exclamation),
-        "||" => Ok(Operator::OrOr),
-        "&&" => Ok(Operator::AndAnd),
-        "+=" => Ok(Operator::PlusEqual),
-        "-=" => Ok(Operator::MinusEqual),
-        "++" => Ok(Operator::PlusPlus),
-        "--" => Ok(Operator::MinusMinus),
-        "." => Ok(Operator::Dot),
-        "->" => Ok(Operator::Arrow),
-        _ => Err(String::from("unexpected error during parsing operator")),
-    }
-}
-
 fn is_int_literal(token: &str) -> bool {
     token.chars().all(|c| c.is_ascii_digit())
 }
 
 fn is_float_literal(token: &str) -> bool {
     token.contains(".") || token.contains("e") || token.contains("E") || token.contains("f")
-}
-
-fn is_char_literal(token: &str) -> bool {
-    let chars = token.chars();
-    false
 }
 
 fn is_identifier(token: &str) -> bool {
@@ -552,21 +348,6 @@ fn is_identifier(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::lexer::*;
-
-    #[test]
-    fn keywords() {
-        let imput1 = "for";
-        let imput2 = "while";
-        let imput3 = "return";
-        let imput4 = "if";
-        let imput5 = "else";
-
-        assert_eq!(get_keyword(imput1), Ok(Keyword::For));
-        assert_eq!(get_keyword(imput2), Ok(Keyword::While));
-        assert_eq!(get_keyword(imput3), Ok(Keyword::Return));
-        assert_eq!(get_keyword(imput4), Ok(Keyword::If));
-        assert_eq!(get_keyword(imput5), Ok(Keyword::Else));
-    }
 
     #[test]
     fn only_keywords() {
